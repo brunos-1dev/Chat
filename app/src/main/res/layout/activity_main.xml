@@ -8,32 +8,28 @@
     tools:context=".MainActivity"
     android:padding="16dp">
 
-    <!-- Título opcional -->
-    <TextView
-        android:id="@+id/title"
+    <!-- Guideline en el centro vertical de la pantalla -->
+    <androidx.constraintlayout.widget.Guideline
+        android:id="@+id/guideline_center_screen_vertical"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="ShadowRec"
-        android:textSize="24sp"
-        android:textStyle="bold"
-        app:layout_constraintBottom_toTopOf="@+id/buttonCamera"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintHorizontal_bias="0.5"
-        app:layout_constraintBottom_margin="32dp" />
+        android:orientation="horizontal"
+        app:layout_constraintGuide_percent="0.5" /> <!-- 50% de la altura del padre -->
 
     <ImageView
         android:id="@+id/logoImage"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:src="@drawable/Logo_ShadowRec"
-        app:layout_constraintTop_toTopOf="parent"
+        android:contentDescription="Logo de ShadowRec"
+        android:src="@drawable/logo_shadowrec"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintBottom_toTopOf="@+id/title"
-        />
+        app:layout_constraintHorizontal_bias="0.5"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toTopOf="@+id/guideline_center_screen_vertical"
+        app:layout_constraintVertical_bias="0.5" /> <!-- Centrado entre el tope del padre y la guideline central -->
 
-    <!-- Botón Configurar Cámara -->
+    <!-- Botones (sin cambios) -->
     <Button
         android:id="@+id/buttonCamera"
         android:layout_width="0dp"
@@ -43,9 +39,8 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintBottom_toTopOf="@+id/buttonVoice"
         app:layout_constraintHorizontal_bias="0.5"
-        app:layout_constraintBottom_margin="16dp" />
+        android:layout_marginBottom="16dp" />
 
-    <!-- Botón Configurar Voz -->
     <Button
         android:id="@+id/buttonVoice"
         android:layout_width="0dp"
@@ -54,7 +49,7 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintBottom_margin="32dp"
+        android:layout_marginBottom="16dp"
         app:layout_constraintHorizontal_bias="0.5" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>
