@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "508699563715",
+    "project_id": "shadowrec-a7a96",
+    "storage_bucket": "shadowrec-a7a96.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:508699563715:android:64c31225e41c5a99f2b476",
+        "android_client_info": {
+          "package_name": "com.example.shadowrec"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBbFoaAQPjP55fuTzYJUVfvL2lbt6fJOw8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

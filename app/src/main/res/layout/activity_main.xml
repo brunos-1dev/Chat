@@ -8,13 +8,12 @@
     tools:context=".MainActivity"
     android:padding="16dp">
 
-    <!-- Guideline en el centro vertical de la pantalla -->
     <androidx.constraintlayout.widget.Guideline
         android:id="@+id/guideline_center_screen_vertical"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        app:layout_constraintGuide_percent="0.5" /> <!-- 50% de la altura del padre -->
+        app:layout_constraintGuide_percent="0.5" />
 
     <ImageView
         android:id="@+id/logoImage"
@@ -27,9 +26,8 @@
         app:layout_constraintHorizontal_bias="0.5"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintBottom_toTopOf="@+id/guideline_center_screen_vertical"
-        app:layout_constraintVertical_bias="0.5" /> <!-- Centrado entre el tope del padre y la guideline central -->
+        app:layout_constraintVertical_bias="0.5" />
 
-    <!-- Botones (sin cambios) -->
     <Button
         android:id="@+id/buttonCamera"
         android:layout_width="0dp"
@@ -37,15 +35,15 @@
         android:text="Configurar cámara"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintBottom_toTopOf="@+id/buttonVoice"
+        app:layout_constraintBottom_toTopOf="@+id/buttonUbi"
         app:layout_constraintHorizontal_bias="0.5"
         android:layout_marginBottom="16dp" />
 
     <Button
-        android:id="@+id/buttonVoice"
+        android:id="@+id/buttonUbi"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:text="Configurar voz"
+        android:text="Configurar ubicación"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintBottom_toBottomOf="parent"
