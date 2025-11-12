@@ -22,13 +22,19 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.google.android.gms.common.api.ResolvableApiException
-import com.google.android.gms.location.*
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.LocationSettingsRequest
 import com.google.android.gms.location.Priority
+import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.tasks.CancellationTokenSource
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.ktx.firestore
+import com.google.firebase.ktx.Firebase
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -50,6 +56,12 @@ class MainActivity : AppCompatActivity() {
 
     // Fused Location
     private lateinit var fusedLocationClient: FusedLocationProviderClient
+
+    // Firestore helpers
+    private var lastLocation: Location? = null
+    private val deviceId by lazy {
+        Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -77,7 +89,6 @@ class MainActivity : AppCompatActivity() {
 
         // ====== UBICACIÓN ======
         buttonUbi.setOnClickListener {
-            // 1) pedir permiso si falta
             val hasFine = ContextCompat.checkSelfPermission(
                 this, Manifest.permission.ACCESS_FINE_LOCATION
             ) == PackageManager.PERMISSION_GRANTED
@@ -92,7 +103,6 @@ class MainActivity : AppCompatActivity() {
                     REQUEST_LOCATION_PERMISSION
                 )
             } else {
-                // 2) verificar/activar servicios y luego leer ubicación
                 ensureLocationEnabled()
             }
         }
@@ -186,6 +196,7 @@ class MainActivity : AppCompatActivity() {
                 REQUEST_QR_SCAN -> {
                     val qr = data?.getStringExtra("qr")
                     if (!qr.isNullOrEmpty()) {
+                        saveQrToFirestore(qr, source = "live") // 👈 guarda
                         AlertDialog.Builder(this)
                             .setTitle("QR detectado")
                             .setMessage(qr)
@@ -201,14 +212,13 @@ class MainActivity : AppCompatActivity() {
                         arrayOf("image/jpeg"),
                         null
                     )
-                    scanQrFromImage(photoUri) // Leer QR en la foto (opcional)
+                    scanQrFromImage(photoUri) // Leer QR en la foto
                 }
                 REQUEST_VIDEO_CAPTURE -> {
                     Toast.makeText(this, "Video grabado correctamente", Toast.LENGTH_SHORT).show()
                 }
                 REQUEST_ENABLE_LOCATION -> {
                     if (isLocationEnabled()) {
-                        // Ya está encendida: obtenemos la ubicación
                         fetchCurrentLocation()
                     } else {
                         Toast.makeText(this, "La ubicación sigue desactivada", Toast.LENGTH_SHORT).show()
@@ -220,7 +230,6 @@ class MainActivity : AppCompatActivity() {
 
     // ====== Activar servicios de ubicación (SettingsClient) ======
     private fun ensureLocationEnabled() {
-        // Requiere permisos concedidos
         val locationRequest = LocationRequest.Builder(
             Priority.PRIORITY_HIGH_ACCURACY,
             10_000L
@@ -228,22 +237,16 @@ class MainActivity : AppCompatActivity() {
 
         val settingsRequest = LocationSettingsRequest.Builder()
             .addLocationRequest(locationRequest)
-            .setAlwaysShow(true) // fuerza diálogo resolvible
+            .setAlwaysShow(true)
             .build()
 
         val client = LocationServices.getSettingsClient(this)
         client.checkLocationSettings(settingsRequest)
-            .addOnSuccessListener {
-                // Servicios OK → leer ubicación
-                fetchCurrentLocation()
-            }
+            .addOnSuccessListener { fetchCurrentLocation() }
             .addOnFailureListener { ex ->
                 if (ex is ResolvableApiException) {
-                    try {
-                        ex.startResolutionForResult(this, REQUEST_ENABLE_LOCATION)
-                    } catch (_: Exception) {
-                        openLocationSettingsFallback()
-                    }
+                    try { ex.startResolutionForResult(this, REQUEST_ENABLE_LOCATION) }
+                    catch (_: Exception) { openLocationSettingsFallback() }
                 } else {
                     openLocationSettingsFallback()
                 }
@@ -271,8 +274,6 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Falta permiso de ubicación", Toast.LENGTH_SHORT).show()
             return
         }
-
-        // Si los servicios no están activos, avisamos
         if (!isLocationEnabled()) {
             Toast.makeText(this, "Por favor, activá la ubicación", Toast.LENGTH_SHORT).show()
             return
@@ -282,13 +283,19 @@ class MainActivity : AppCompatActivity() {
         fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, cts.token)
             .addOnSuccessListener { loc: Location? ->
                 if (loc != null) {
+                    lastLocation = loc
+                    saveLocationToFirestore(loc)   // 👈 guarda
                     showLocationDialog(loc)
                 } else {
-                    // Fallback a lastLocation
                     fusedLocationClient.lastLocation
                         .addOnSuccessListener { last: Location? ->
-                            if (last != null) showLocationDialog(last)
-                            else Toast.makeText(this, "No se pudo obtener la ubicación", Toast.LENGTH_SHORT).show()
+                            if (last != null) {
+                                lastLocation = last
+                                saveLocationToFirestore(last) // 👈 guarda
+                                showLocationDialog(last)
+                            } else {
+                                Toast.makeText(this, "No se pudo obtener la ubicación", Toast.LENGTH_SHORT).show()
+                            }
                         }
                         .addOnFailureListener {
                             Toast.makeText(this, "No se pudo obtener la ubicación", Toast.LENGTH_SHORT).show()
@@ -320,7 +327,7 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    // ====== ML Kit: leer QR desde imagen (usado tras foto) ======
+    // ====== ML Kit: leer QR desde imagen ======
     private fun scanQrFromImage(uri: Uri) {
         val image = try {
             InputImage.fromFilePath(this, uri)
@@ -338,6 +345,7 @@ class MainActivity : AppCompatActivity() {
             .addOnSuccessListener { barcodes ->
                 val value = barcodes.firstOrNull()?.rawValue
                 if (!value.isNullOrEmpty()) {
+                    saveQrToFirestore(value, source = "photo") // 👈 guarda
                     AlertDialog.Builder(this)
                         .setTitle("QR detectado en la foto")
                         .setMessage(value)
@@ -349,6 +357,48 @@ class MainActivity : AppCompatActivity() {
             }
             .addOnFailureListener { e ->
                 Toast.makeText(this, "Error leyendo QR: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            }
+    }
+
+    // ====== Firestore: guardar ubicación ======
+    private fun saveLocationToFirestore(loc: Location) {
+        val data = hashMapOf(
+            "deviceId" to deviceId,
+            "lat" to loc.latitude,
+            "lon" to loc.longitude,
+            "accuracy" to loc.accuracy,
+            "createdAt" to FieldValue.serverTimestamp(),
+            "androidVersion" to Build.VERSION.SDK_INT,
+            "brand" to Build.BRAND,
+            "model" to Build.MODEL
+        )
+        Firebase.firestore.collection("locations")
+            .add(data)
+            .addOnFailureListener { e ->
+                Toast.makeText(this, "Error guardando ubicación: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            }
+    }
+
+    // ====== Firestore: guardar QR ======
+    private fun saveQrToFirestore(qrText: String, source: String) {
+        val loc = lastLocation
+        val data = hashMapOf(
+            "deviceId" to deviceId,
+            "text" to qrText,
+            "source" to source, // "live" o "photo"
+            "createdAt" to FieldValue.serverTimestamp()
+        ).apply {
+            if (loc != null) {
+                put("lat", loc.latitude)
+                put("lon", loc.longitude)
+                put("accuracy", loc.accuracy)
+            }
+        }
+
+        Firebase.firestore.collection("qr_scans")
+            .add(data)
+            .addOnFailureListener { e ->
+                Toast.makeText(this, "Error guardando QR: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
             }
     }
 }
