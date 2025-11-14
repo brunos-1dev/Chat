@@ -63,6 +63,15 @@ class MainActivity : AppCompatActivity() {
         Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
     }
 
+    // Tracking foreground service
+    private var isTracking = false
+    private var currentSessionId: String? = null
+
+    private val prefs by lazy {
+        getSharedPreferences("shadowrec_prefs", Context.MODE_PRIVATE)
+    }
+
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -71,6 +80,9 @@ class MainActivity : AppCompatActivity() {
 
         val buttonCamera = findViewById<Button>(R.id.buttonCamera)
         val buttonUbi = findViewById<Button>(R.id.buttonUbi)
+
+        // Recuperar si el tracking estaba activo antes (por si el service seguía corriendo)
+        isTracking = prefs.getBoolean("tracking_active", false)
 
         // ====== CÁMARA / QR ======
         buttonCamera.setOnClickListener {
@@ -87,24 +99,67 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // ====== UBICACIÓN ======
+        // ====== UBICACIÓN (iniciar / detener tracking) ======
         buttonUbi.setOnClickListener {
-            val hasFine = ContextCompat.checkSelfPermission(
-                this, Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
+            if (!isTracking) {
+                val hasFine = ContextCompat.checkSelfPermission(
+                    this, Manifest.permission.ACCESS_FINE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
 
-            if (!hasFine) {
-                ActivityCompat.requestPermissions(
-                    this,
-                    arrayOf(
-                        Manifest.permission.ACCESS_FINE_LOCATION,
-                        Manifest.permission.ACCESS_COARSE_LOCATION
-                    ),
-                    REQUEST_LOCATION_PERMISSION
-                )
+                if (!hasFine) {
+                    ActivityCompat.requestPermissions(
+                        this,
+                        arrayOf(
+                            Manifest.permission.ACCESS_FINE_LOCATION,
+                            Manifest.permission.ACCESS_COARSE_LOCATION
+                        ),
+                        REQUEST_LOCATION_PERMISSION
+                    )
+                } else {
+                    startLocationTrackingService()
+                }
             } else {
-                ensureLocationEnabled()
+                stopLocationTrackingService()
             }
+        }
+
+        // Texto inicial del botón según el estado
+        updateUbiButtonText()
+    }
+
+    // ====== Servicio de tracking: start/stop ======
+
+    private fun startLocationTrackingService() {
+        // Generamos un nuevo sessionId cada vez que se inicia el tracking
+        val sessionId = UUID.randomUUID().toString()
+        currentSessionId = sessionId
+
+        val serviceIntent = Intent(this, LocationTrackingService::class.java).apply {
+            putExtra(LocationTrackingService.EXTRA_SESSION_ID, sessionId)
+        }
+
+        ContextCompat.startForegroundService(this, serviceIntent)
+        isTracking = true
+        prefs.edit().putBoolean("tracking_active", true).apply()
+        updateUbiButtonText()
+    }
+
+
+    private fun stopLocationTrackingService() {
+        val serviceIntent = Intent(this, LocationTrackingService::class.java)
+        stopService(serviceIntent)
+        isTracking = false
+        currentSessionId = null
+        prefs.edit().putBoolean("tracking_active", false).apply()
+        updateUbiButtonText()
+    }
+
+    private fun updateUbiButtonText() {
+        val buttonUbi = findViewById<Button>(R.id.buttonUbi)
+        buttonUbi.text = if (isTracking) {
+            "Detener ubicación"
+        } else {
+            "Iniciar ubicación"
         }
     }
 
@@ -180,7 +235,7 @@ class MainActivity : AppCompatActivity() {
             }
             REQUEST_LOCATION_PERMISSION -> {
                 if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    ensureLocationEnabled()
+                    startLocationTrackingService()
                 } else {
                     Toast.makeText(this, "Permiso de ubicación denegado", Toast.LENGTH_SHORT).show()
                 }
