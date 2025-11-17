@@ -56,18 +56,13 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.firestore.ktx)
 
-    // Futures para ProcessCameraProvider
-    implementation(libs.guava.listenablefuture)
+    // Futures + Guava para ListenableFuture
     implementation(libs.androidx.concurrent.futures)
+    implementation(libs.guava.android)
 
     // Test
-    testImplementation("junit:junit:4.13.2")
+    testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
-
-    // Guava completo (variant ANDROID) => trae ListenableFuture
-    implementation("com.google.guava:guava:32.1.3-android")
-// Futures de AndroidX (CameraX lo usa)
-    implementation("androidx.concurrent:concurrent-futures:1.1.0")
-
 }
+

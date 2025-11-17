@@ -17,16 +17,18 @@ import android.provider.MediaStore
 import android.provider.Settings
 import android.widget.Button
 import android.widget.Toast
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.google.android.gms.common.api.ResolvableApiException
+import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.LocationSettingsRequest
 import com.google.android.gms.location.Priority
-import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.tasks.CancellationTokenSource
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
@@ -49,7 +51,6 @@ class MainActivity : AppCompatActivity() {
 
     // Ubicación
     private val REQUEST_LOCATION_PERMISSION = 200
-    private val REQUEST_ENABLE_LOCATION = 201
 
     private lateinit var photoUri: Uri
     private lateinit var photoFile: File
@@ -66,11 +67,23 @@ class MainActivity : AppCompatActivity() {
     // Tracking foreground service
     private var isTracking = false
     private var currentSessionId: String? = null
-
     private val prefs by lazy {
         getSharedPreferences("shadowrec_prefs", Context.MODE_PRIVATE)
     }
 
+    // Acción a ejecutar cuando el usuario enciende la ubicación desde el diálogo
+    private var onLocationEnabledAction: (() -> Unit)? = null
+
+    // Launcher moderno para el IntentSender del diálogo de “activar ubicación”
+    private val enableLocationLauncher =
+        registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                onLocationEnabledAction?.invoke()
+                onLocationEnabledAction = null
+            } else {
+                Toast.makeText(this, "La ubicación sigue desactivada", Toast.LENGTH_SHORT).show()
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -81,8 +94,9 @@ class MainActivity : AppCompatActivity() {
         val buttonCamera = findViewById<Button>(R.id.buttonCamera)
         val buttonUbi = findViewById<Button>(R.id.buttonUbi)
 
-        // Recuperar si el tracking estaba activo antes (por si el service seguía corriendo)
+        // Recuperar estado previo del tracking
         isTracking = prefs.getBoolean("tracking_active", false)
+        updateUbiButtonText()
 
         // ====== CÁMARA / QR ======
         buttonCamera.setOnClickListener {
@@ -102,11 +116,14 @@ class MainActivity : AppCompatActivity() {
         // ====== UBICACIÓN (iniciar / detener tracking) ======
         buttonUbi.setOnClickListener {
             if (!isTracking) {
-                val hasFine = ContextCompat.checkSelfPermission(
+                val fineGranted = ContextCompat.checkSelfPermission(
                     this, Manifest.permission.ACCESS_FINE_LOCATION
                 ) == PackageManager.PERMISSION_GRANTED
+                val coarseGranted = ContextCompat.checkSelfPermission(
+                    this, Manifest.permission.ACCESS_COARSE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
 
-                if (!hasFine) {
+                if (!fineGranted && !coarseGranted) {
                     ActivityCompat.requestPermissions(
                         this,
                         arrayOf(
@@ -116,21 +133,17 @@ class MainActivity : AppCompatActivity() {
                         REQUEST_LOCATION_PERMISSION
                     )
                 } else {
-                    startLocationTrackingService()
+                    // Verificamos/encendemos ubicación del sistema y luego iniciamos el tracking
+                    ensureLocationEnabled { startLocationTrackingService() }
                 }
             } else {
                 stopLocationTrackingService()
             }
         }
-
-        // Texto inicial del botón según el estado
-        updateUbiButtonText()
     }
 
     // ====== Servicio de tracking: start/stop ======
-
     private fun startLocationTrackingService() {
-        // Generamos un nuevo sessionId cada vez que se inicia el tracking
         val sessionId = UUID.randomUUID().toString()
         currentSessionId = sessionId
 
@@ -144,7 +157,6 @@ class MainActivity : AppCompatActivity() {
         updateUbiButtonText()
     }
 
-
     private fun stopLocationTrackingService() {
         val serviceIntent = Intent(this, LocationTrackingService::class.java)
         stopService(serviceIntent)
@@ -156,11 +168,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateUbiButtonText() {
         val buttonUbi = findViewById<Button>(R.id.buttonUbi)
-        buttonUbi.text = if (isTracking) {
-            "Detener ubicación"
-        } else {
-            "Iniciar ubicación"
-        }
+        buttonUbi.text = if (isTracking) "Detener ubicación" else "Iniciar ubicación"
     }
 
     // ====== Diálogo de cámara ======
@@ -234,8 +242,10 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             REQUEST_LOCATION_PERMISSION -> {
-                if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    startLocationTrackingService()
+                val anyGranted = grantResults.any { it == PackageManager.PERMISSION_GRANTED }
+                if (anyGranted) {
+                    // Verificamos/encendemos servicios y luego arrancamos tracking
+                    ensureLocationEnabled { startLocationTrackingService() }
                 } else {
                     Toast.makeText(this, "Permiso de ubicación denegado", Toast.LENGTH_SHORT).show()
                 }
@@ -243,7 +253,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ====== Resultados de activities ======
+    // ====== Resultados de activities (QR / cámara) ======
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (resultCode == Activity.RESULT_OK) {
@@ -251,7 +261,7 @@ class MainActivity : AppCompatActivity() {
                 REQUEST_QR_SCAN -> {
                     val qr = data?.getStringExtra("qr")
                     if (!qr.isNullOrEmpty()) {
-                        saveQrToFirestore(qr, source = "live") // 👈 guarda
+                        saveQrToFirestore(qr, source = "live")
                         AlertDialog.Builder(this)
                             .setTitle("QR detectado")
                             .setMessage(qr)
@@ -267,27 +277,21 @@ class MainActivity : AppCompatActivity() {
                         arrayOf("image/jpeg"),
                         null
                     )
-                    scanQrFromImage(photoUri) // Leer QR en la foto
+                    scanQrFromImage(photoUri)
                 }
                 REQUEST_VIDEO_CAPTURE -> {
                     Toast.makeText(this, "Video grabado correctamente", Toast.LENGTH_SHORT).show()
-                }
-                REQUEST_ENABLE_LOCATION -> {
-                    if (isLocationEnabled()) {
-                        fetchCurrentLocation()
-                    } else {
-                        Toast.makeText(this, "La ubicación sigue desactivada", Toast.LENGTH_SHORT).show()
-                    }
                 }
             }
         }
     }
 
-    // ====== Activar servicios de ubicación (SettingsClient) ======
-    private fun ensureLocationEnabled() {
+    // ====== Verificar/activar servicios de ubicación, luego ejecutar acción ======
+    private fun ensureLocationEnabled(then: () -> Unit) {
+        onLocationEnabledAction = then
+
         val locationRequest = LocationRequest.Builder(
-            Priority.PRIORITY_HIGH_ACCURACY,
-            10_000L
+            Priority.PRIORITY_HIGH_ACCURACY, 10_000L
         ).setMinUpdateIntervalMillis(5_000L).build()
 
         val settingsRequest = LocationSettingsRequest.Builder()
@@ -297,11 +301,19 @@ class MainActivity : AppCompatActivity() {
 
         val client = LocationServices.getSettingsClient(this)
         client.checkLocationSettings(settingsRequest)
-            .addOnSuccessListener { fetchCurrentLocation() }
+            .addOnSuccessListener {
+                // Servicios OK → ejecutamos la acción (iniciar tracking o lo que se pida)
+                onLocationEnabledAction?.invoke()
+                onLocationEnabledAction = null
+            }
             .addOnFailureListener { ex ->
                 if (ex is ResolvableApiException) {
-                    try { ex.startResolutionForResult(this, REQUEST_ENABLE_LOCATION) }
-                    catch (_: Exception) { openLocationSettingsFallback() }
+                    try {
+                        val request = IntentSenderRequest.Builder(ex.resolution.intentSender).build()
+                        enableLocationLauncher.launch(request)
+                    } catch (_: Exception) {
+                        openLocationSettingsFallback()
+                    }
                 } else {
                     openLocationSettingsFallback()
                 }
@@ -319,7 +331,7 @@ class MainActivity : AppCompatActivity() {
                 lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
     }
 
-    // ====== Obtener una única ubicación ======
+    // ====== Obtener una única ubicación (para tus usos on-demand) ======
     private fun fetchCurrentLocation() {
         val hasFine = ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
                 PackageManager.PERMISSION_GRANTED
@@ -339,14 +351,14 @@ class MainActivity : AppCompatActivity() {
             .addOnSuccessListener { loc: Location? ->
                 if (loc != null) {
                     lastLocation = loc
-                    saveLocationToFirestore(loc)   // 👈 guarda
+                    saveLocationToFirestore(loc)
                     showLocationDialog(loc)
                 } else {
                     fusedLocationClient.lastLocation
                         .addOnSuccessListener { last: Location? ->
                             if (last != null) {
                                 lastLocation = last
-                                saveLocationToFirestore(last) // 👈 guarda
+                                saveLocationToFirestore(last)
                                 showLocationDialog(last)
                             } else {
                                 Toast.makeText(this, "No se pudo obtener la ubicación", Toast.LENGTH_SHORT).show()
@@ -400,7 +412,7 @@ class MainActivity : AppCompatActivity() {
             .addOnSuccessListener { barcodes ->
                 val value = barcodes.firstOrNull()?.rawValue
                 if (!value.isNullOrEmpty()) {
-                    saveQrToFirestore(value, source = "photo") // 👈 guarda
+                    saveQrToFirestore(value, source = "photo")
                     AlertDialog.Builder(this)
                         .setTitle("QR detectado en la foto")
                         .setMessage(value)

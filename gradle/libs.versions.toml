@@ -21,9 +21,9 @@ gmsLocation = "21.3.0"
 firebaseBom = "33.3.0"
 googleServices = "4.4.2"
 
-# Futures (para ProcessCameraProvider ListenableFuture)
+# Futures (ProcessCameraProvider) + Guava completo (variante Android)
 concurrentFutures = "1.1.0"
-guavaListenable = "1.0"
+guavaAndroid = "32.1.3-android"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -53,9 +53,9 @@ mlkit-barcode = { group = "com.google.mlkit", name = "barcode-scanning", version
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
 firebase-firestore-ktx = { group = "com.google.firebase", name = "firebase-firestore-ktx" }
 
-# Futures / Guava
+# Futures / Guava (correctos)
 androidx-concurrent-futures = { group = "androidx.concurrent", name = "concurrent-futures", version.ref = "concurrentFutures" }
-guava-listenablefuture = { group = "com.google.guava", name = "listenablefuture", version.ref = "guavaListenable" }
+guava-android = { group = "com.google.guava", name = "guava", version.ref = "guavaAndroid" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
