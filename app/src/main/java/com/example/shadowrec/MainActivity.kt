@@ -34,12 +34,18 @@ import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
+import org.json.JSONException
+import org.json.JSONObject
+
 
 class MainActivity : AppCompatActivity() {
 
@@ -84,6 +90,22 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "La ubicación sigue desactivada", Toast.LENGTH_SHORT).show()
             }
         }
+
+    // --------------------- Firestore paths (resumen + historial) ---------------------
+
+    private fun deviceDoc() =
+        Firebase.firestore.collection("devices").document(deviceId)
+
+    private fun locationHistoryCol() =
+        deviceDoc().collection("location_history")
+
+    private fun qrHistoryCol() =
+        deviceDoc().collection("qr_history")
+
+    private fun asignacionScansCol() =
+        Firebase.firestore.collection("asignacion_scans")
+
+    // -------------------------------------------------------------------------------
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -139,6 +161,12 @@ class MainActivity : AppCompatActivity() {
             } else {
                 stopLocationTrackingService()
             }
+        }
+
+        // Long-press para consultar las últimas N ubicaciones
+        buttonUbi.setOnLongClickListener {
+            showLastLocationHistory(limit = 30)
+            true
         }
     }
 
@@ -244,7 +272,6 @@ class MainActivity : AppCompatActivity() {
             REQUEST_LOCATION_PERMISSION -> {
                 val anyGranted = grantResults.any { it == PackageManager.PERMISSION_GRANTED }
                 if (anyGranted) {
-                    // Verificamos/encendemos servicios y luego arrancamos tracking
                     ensureLocationEnabled { startLocationTrackingService() }
                 } else {
                     Toast.makeText(this, "Permiso de ubicación denegado", Toast.LENGTH_SHORT).show()
@@ -262,9 +289,12 @@ class MainActivity : AppCompatActivity() {
                     val qr = data?.getStringExtra("qr")
                     if (!qr.isNullOrEmpty()) {
                         saveQrToFirestore(qr, source = "live")
+
+                        val pretty = formatQrMessage(qr)
+
                         AlertDialog.Builder(this)
-                            .setTitle("QR detectado")
-                            .setMessage(qr)
+                            .setTitle("Asignación detectada")
+                            .setMessage(pretty)
                             .setPositiveButton("OK", null)
                             .show()
                     }
@@ -302,7 +332,6 @@ class MainActivity : AppCompatActivity() {
         val client = LocationServices.getSettingsClient(this)
         client.checkLocationSettings(settingsRequest)
             .addOnSuccessListener {
-                // Servicios OK → ejecutamos la acción (iniciar tracking o lo que se pida)
                 onLocationEnabledAction?.invoke()
                 onLocationEnabledAction = null
             }
@@ -331,7 +360,7 @@ class MainActivity : AppCompatActivity() {
                 lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
     }
 
-    // ====== Obtener una única ubicación (para tus usos on-demand) ======
+    // ====== Obtener una única ubicación (on-demand) ======
     private fun fetchCurrentLocation() {
         val hasFine = ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
                 PackageManager.PERMISSION_GRANTED
@@ -413,9 +442,12 @@ class MainActivity : AppCompatActivity() {
                 val value = barcodes.firstOrNull()?.rawValue
                 if (!value.isNullOrEmpty()) {
                     saveQrToFirestore(value, source = "photo")
+
+                    val pretty = formatQrMessage(value)
+
                     AlertDialog.Builder(this)
-                        .setTitle("QR detectado en la foto")
-                        .setMessage(value)
+                        .setTitle("Asignación detectada en la foto")
+                        .setMessage(pretty)
                         .setPositiveButton("OK", null)
                         .show()
                 } else {
@@ -427,33 +459,80 @@ class MainActivity : AppCompatActivity() {
             }
     }
 
-    // ====== Firestore: guardar ubicación ======
+    private fun formatQrMessage(qrText: String): String {
+        return try {
+            val json = JSONObject(qrText)
+
+            // Solo lo “embellecemos” si es una asignación
+            if (json.optString("tipo") == "asignacion") {
+                """
+            Fecha: ${json.optString("fecha")}
+            Unidad: ${json.optString("unidad")}
+            Turno: ${json.optString("turno")}
+            Cuadrícula: ${json.optString("cuadricula")}
+            Móvil: ${json.optString("movil")}
+            Personal: ${json.optString("personal")}
+            Localidad: ${json.optString("localidad")}
+            Asignación: ${json.optString("asignacion")}
+            """.trimIndent()
+            } else {
+                qrText
+            }
+        } catch (e: JSONException) {
+            // Si no es JSON válido, mostramos el texto crudo
+            qrText
+        }
+    }
+
+
+    // ====== Firestore: guardar ubicación (resumen + historial) ======
     private fun saveLocationToFirestore(loc: Location) {
-        val data = hashMapOf(
-            "deviceId" to deviceId,
+        // Resumen “vivo”
+        val lastLocationMap = mapOf(
             "lat" to loc.latitude,
             "lon" to loc.longitude,
             "accuracy" to loc.accuracy,
-            "createdAt" to FieldValue.serverTimestamp(),
+            "time" to FieldValue.serverTimestamp()
+        )
+        val summary = mapOf(
+            "deviceId" to deviceId,
             "androidVersion" to Build.VERSION.SDK_INT,
             "brand" to Build.BRAND,
-            "model" to Build.MODEL
+            "model" to Build.MODEL,
+            "sessionId" to (currentSessionId ?: ""),
+            "tracking" to isTracking,
+            "lastLocation" to lastLocationMap,
+            "updatedAt" to FieldValue.serverTimestamp()
         )
-        Firebase.firestore.collection("locations")
-            .add(data)
+        deviceDoc()
+            .set(summary, SetOptions.merge())
             .addOnFailureListener { e ->
-                Toast.makeText(this, "Error guardando ubicación: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Error guardando resumen: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            }
+
+        // Historial (append-only)
+        val history = mapOf(
+            "lat" to loc.latitude,
+            "lon" to loc.longitude,
+            "accuracy" to loc.accuracy,
+            "time" to FieldValue.serverTimestamp(),
+            "sessionId" to (currentSessionId ?: "")
+        )
+        locationHistoryCol()
+            .add(history)
+            .addOnFailureListener { e ->
+                Toast.makeText(this, "Error guardando historial: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
             }
     }
 
-    // ====== Firestore: guardar QR ======
+    // ====== Firestore: guardar QR (resumen + historial) ======
     private fun saveQrToFirestore(qrText: String, source: String) {
         val loc = lastLocation
-        val data = hashMapOf(
-            "deviceId" to deviceId,
+        val lastQr = mutableMapOf(
             "text" to qrText,
-            "source" to source, // "live" o "photo"
-            "createdAt" to FieldValue.serverTimestamp()
+            "source" to source,              // "live" o "photo"
+            "scannedAt" to FieldValue.serverTimestamp(),
+            "sessionId" to (currentSessionId ?: "")
         ).apply {
             if (loc != null) {
                 put("lat", loc.latitude)
@@ -462,10 +541,127 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        Firebase.firestore.collection("qr_scans")
-            .add(data)
+        // Resumen “vivo”
+        val summary = mapOf(
+            "deviceId" to deviceId,
+            "lastQr" to lastQr,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        deviceDoc()
+            .set(summary, SetOptions.merge())
             .addOnFailureListener { e ->
-                Toast.makeText(this, "Error guardando QR: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Error guardando resumen QR: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            }
+
+        // Historial (append-only)
+        qrHistoryCol()
+            .add(lastQr)
+            .addOnFailureListener { e ->
+                Toast.makeText(this, "Error guardando historial QR: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            }
+
+        // === NUEVO: si el QR es una asignación JSON, crear doc en 'asignacion_scans' ===
+        try {
+            val json = JSONObject(qrText)
+
+            // Solo si viene con "tipo": "asignacion"
+            if (json.optString("tipo") == "asignacion") {
+                val asignacionData = mutableMapOf<String, Any?>(
+                    "deviceId" to deviceId,
+                    "androidId" to deviceId,       // por si querés usar ambos nombres
+                    "scannedAt" to FieldValue.serverTimestamp()
+                )
+
+                val keys = listOf(
+                    "fecha",
+                    "unidad",
+                    "turno",
+                    "cuadricula",
+                    "movil",
+                    "personal",
+                    "localidad",
+                    "asignacion"
+                )
+
+                for (key in keys) {
+                    if (!json.isNull(key)) {
+                        asignacionData[key] = json.optString(key)
+                    }
+                }
+
+                asignacionData["rawQr"] = qrText
+
+                asignacionScansCol()
+                    .add(asignacionData)
+                    .addOnFailureListener { e ->
+                        Toast.makeText(
+                            this,
+                            "Error guardando asignación: ${e.localizedMessage}",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+            }
+        } catch (e: JSONException) {
+            // El QR no era JSON válido -> lo ignoramos para 'asignacion_scans'
+            // (igual quedó guardado en qr_history y en lastQr)
+        }
+    }
+
+    // ====== Historial: últimas N ubicaciones (AlertDialog simple) ======
+    private fun showLastLocationHistory(limit: Int) {
+        locationHistoryCol()
+            .orderBy("time", Query.Direction.DESCENDING)
+            .limit(limit.toLong())
+            .get()
+            .addOnSuccessListener { qs ->
+                if (qs.isEmpty) {
+                    Toast.makeText(this, "Sin historial de ubicaciones", Toast.LENGTH_SHORT).show()
+                    return@addOnSuccessListener
+                }
+                val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                val sb = StringBuilder()
+                for (doc in qs.documents) {
+                    val lat = doc.getDouble("lat") ?: 0.0
+                    val lon = doc.getDouble("lon") ?: 0.0
+                    val acc = doc.getDouble("accuracy")
+                    val ts: Timestamp? = doc.getTimestamp("time")
+                    val timeStr = ts?.toDate()?.let { sdf.format(it) } ?: "—"
+                    val sid = doc.getString("sessionId")
+
+                    sb.append("• ").append(timeStr).append(" — ")
+                        .append(String.format(Locale.US, "%.6f, %.6f", lat, lon))
+                    if (acc != null) sb.append(" (±").append(String.format(Locale.US, "%.1f", acc)).append(" m)")
+                    if (!sid.isNullOrEmpty()) sb.append("  [").append(sid.take(8)).append("]")
+                    sb.append('\n')
+                }
+
+                AlertDialog.Builder(this)
+                    .setTitle("Últimas ${qs.size()} ubicaciones")
+                    .setMessage(sb.toString())
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
+            .addOnFailureListener {
+                Toast.makeText(this, "Error leyendo historial", Toast.LENGTH_SHORT).show()
+            }
+    }
+
+    // (Opcional) ejemplo para rango de fechas
+    // startMillis / endMillis son epoch millis
+    private fun fetchLocationHistoryBetween(startMillis: Long, endMillis: Long) {
+        val start = Timestamp(Date(startMillis))
+        val end = Timestamp(Date(endMillis))
+        locationHistoryCol()
+            .whereGreaterThanOrEqualTo("time", start)
+            .whereLessThan("time", end)
+            .orderBy("time", Query.Direction.ASCENDING)
+            .get()
+            .addOnSuccessListener { qs ->
+                Toast.makeText(this, "Resultados: ${qs.size()}", Toast.LENGTH_SHORT).show()
+                // TODO: mostrar en lista/Mapa según necesites
+            }
+            .addOnFailureListener {
+                Toast.makeText(this, "Error consultando rango", Toast.LENGTH_SHORT).show()
             }
     }
 }
