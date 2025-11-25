@@ -35,6 +35,7 @@ import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import com.google.firebase.Timestamp
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
@@ -45,7 +46,6 @@ import java.text.SimpleDateFormat
 import java.util.*
 import org.json.JSONException
 import org.json.JSONObject
-
 
 class MainActivity : AppCompatActivity() {
 
@@ -111,6 +111,14 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // ✅ Sólo abrimos AuthActivity si hace falta (no logueado o perfil incompleto)
+        val profileComplete = prefs.getBoolean("user_profile_complete", false)
+        val currentUser = FirebaseAuth.getInstance().currentUser
+        if (!profileComplete || currentUser == null) {
+            val authIntent = Intent(this, AuthActivity::class.java)
+            startActivity(authIntent)
+        }
+
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
 
         val buttonCamera = findViewById<Button>(R.id.buttonCamera)
@@ -167,6 +175,25 @@ class MainActivity : AppCompatActivity() {
         buttonUbi.setOnLongClickListener {
             showLastLocationHistory(limit = 30)
             true
+        }
+    }
+
+    // ====== Helpers de usuario (para nombre a guardar en Firestore) ======
+
+    private fun getScannerDisplayName(): String {
+        val firstName = prefs.getString("user_first_name", "") ?: ""
+        val lastName = prefs.getString("user_last_name", "") ?: ""
+        val email = prefs.getString("user_email", "") ?: ""
+
+        val fullName = listOf(firstName, lastName)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+            .trim()
+
+        return when {
+            fullName.isNotEmpty() -> fullName
+            email.isNotEmpty() -> email
+            else -> deviceId
         }
     }
 
@@ -484,7 +511,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-
     // ====== Firestore: guardar ubicación (resumen + historial) ======
     private fun saveLocationToFirestore(loc: Location) {
         // Resumen “vivo”
@@ -571,6 +597,19 @@ class MainActivity : AppCompatActivity() {
                     "androidId" to deviceId,       // por si querés usar ambos nombres
                     "scannedAt" to FieldValue.serverTimestamp()
                 )
+
+                // Datos del usuario que escanea
+                val scannerName = getScannerDisplayName()
+                val scannerEmail = prefs.getString("user_email", "") ?: ""
+                val uid = FirebaseAuth.getInstance().currentUser?.uid
+
+                asignacionData["scannerName"] = scannerName
+                if (scannerEmail.isNotEmpty()) {
+                    asignacionData["scannerEmail"] = scannerEmail
+                }
+                if (!uid.isNullOrEmpty()) {
+                    asignacionData["scannerUid"] = uid
+                }
 
                 val keys = listOf(
                     "fecha",

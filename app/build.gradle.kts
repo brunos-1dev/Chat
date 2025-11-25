@@ -52,9 +52,10 @@ dependencies {
     // Play Services Location (GPS)
     implementation(libs.play.services.location)
 
-    // Firebase Firestore
-    implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.firestore.ktx)
+    // Firebase (YA LO TENÍAS)
+    implementation(platform(libs.firebase.bom))      // BOM
+    implementation(libs.firebase.firestore.ktx)     // Firestore
+    implementation("com.google.firebase:firebase-auth-ktx") // 🔥 NUEVO: Auth
 
     // Futures + Guava para ListenableFuture
     implementation(libs.androidx.concurrent.futures)
@@ -65,4 +66,5 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
 }
+
 
