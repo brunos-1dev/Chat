@@ -35,6 +35,18 @@
         android:text="Configurar cámara"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintBottom_toTopOf="@+id/buttonChats"
+        app:layout_constraintHorizontal_bias="0.5"
+        android:layout_marginBottom="16dp" />
+
+    <!-- NUEVO: botón para chats / usuarios -->
+    <Button
+        android:id="@+id/buttonChats"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="Chats / Usuarios"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintBottom_toTopOf="@+id/buttonUbi"
         app:layout_constraintHorizontal_bias="0.5"
         android:layout_marginBottom="16dp" />

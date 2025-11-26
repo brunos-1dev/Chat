@@ -123,10 +123,17 @@ class MainActivity : AppCompatActivity() {
 
         val buttonCamera = findViewById<Button>(R.id.buttonCamera)
         val buttonUbi = findViewById<Button>(R.id.buttonUbi)
+        val buttonChats = findViewById<Button>(R.id.buttonChats)
+
+        buttonChats.setOnClickListener {
+            val i = Intent(this, UsersActivity::class.java)
+            startActivity(i)
+        }
 
         // Recuperar estado previo del tracking
         isTracking = prefs.getBoolean("tracking_active", false)
         updateUbiButtonText()
+
 
         // ====== CÁMARA / QR ======
         buttonCamera.setOnClickListener {

@@ -53,6 +53,10 @@
 
         <activity android:name=".AuthActivity" />
 
+        <activity android:name=".ChatActivity" />
+
+        <activity android:name=".UsersActivity" />
+
 
         <!-- FileProvider para fotos/vídeos (ya existente) -->
         <provider

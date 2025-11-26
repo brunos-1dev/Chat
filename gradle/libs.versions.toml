@@ -24,6 +24,7 @@ googleServices = "4.4.2"
 # Futures (ProcessCameraProvider) + Guava completo (variante Android)
 concurrentFutures = "1.1.0"
 guavaAndroid = "32.1.3-android"
+firebaseAuthKtx = "24.0.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -56,6 +57,7 @@ firebase-firestore-ktx = { group = "com.google.firebase", name = "firebase-fires
 # Futures / Guava (correctos)
 androidx-concurrent-futures = { group = "androidx.concurrent", name = "concurrent-futures", version.ref = "concurrentFutures" }
 guava-android = { group = "com.google.guava", name = "guava", version.ref = "guavaAndroid" }
+firebase-auth-ktx = { group = "com.google.firebase", name = "firebase-auth-ktx" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
