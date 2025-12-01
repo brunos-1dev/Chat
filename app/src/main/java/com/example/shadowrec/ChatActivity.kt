@@ -144,6 +144,8 @@ class ChatActivity : AppCompatActivity() {
                 }
 
                 messages.clear()
+                var hasMessages = false
+
                 if (snapshot != null) {
                     for (doc in snapshot.documents) {
                         val text = doc.getString("text") ?: ""
@@ -157,7 +159,10 @@ class ChatActivity : AppCompatActivity() {
                         }
                         messages.add("$label: $text")
                     }
+                    // 🔧 Corregido: usamos !snapshot.isEmpty en vez de isNotEmpty
+                    hasMessages = !snapshot.isEmpty
                 }
+
                 adapter.notifyDataSetChanged()
                 // scrollear al final
                 if (messages.isNotEmpty()) {
@@ -165,7 +170,28 @@ class ChatActivity : AppCompatActivity() {
                         listMessages.setSelection(messages.size - 1)
                     }
                 }
+
+                // Marcar esta conversación como leída cuando hay mensajes
+                if (hasMessages) {
+                    markConversationAsRead()
+                }
             }
+    }
+
+    // Actualizar readStatus[currentUid] con serverTimestamp
+    private fun markConversationAsRead() {
+        val convId = conversationId ?: return
+        val uid = currentUid ?: return
+
+        val update = hashMapOf(
+            "readStatus" to hashMapOf(
+                uid to FieldValue.serverTimestamp()
+            )
+        )
+
+        db.collection("conversations")
+            .document(convId)
+            .set(update, SetOptions.merge())
     }
 
     private fun sendMessage() {
