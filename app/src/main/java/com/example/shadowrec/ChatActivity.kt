@@ -3,18 +3,22 @@ package com.example.shadowrec
 import android.os.Bundle
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
+import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
-import com.google.firebase.ktx.Firebase
 import com.google.firebase.firestore.ktx.firestore
+import com.google.firebase.ktx.Firebase
 
 class ChatActivity : AppCompatActivity() {
 
     companion object {
-        const val EXTRA_OTHER_EMAIL = "extra_other_email"
+        const val EXTRA_OTHER_EMAIL = "extra_other_email"        // compat viejo
+        const val EXTRA_CONVERSATION_ID = "extra_conversation_id"
+        const val EXTRA_IS_GROUP = "extra_is_group"
+        const val EXTRA_CHAT_TITLE = "extra_chat_title"
     }
 
     private lateinit var txtChatTitle: TextView
@@ -34,12 +38,16 @@ class ChatActivity : AppCompatActivity() {
     private var currentUid: String? = null
     private var currentEmail: String? = null
 
-    private var otherUid: String? = null
-    private var otherEmail: String? = null
-    private var otherDisplayName: String = ""
-
     private var conversationId: String? = null
+    private var isGroup: Boolean = false
+
+    private var otherEmailForDirect: String? = null // compat por si se entra por email (viejo flujo)
+
     private var messagesListener: ListenerRegistration? = null
+    private var conversationListener: ListenerRegistration? = null
+
+    // uid -> nombre (para mostrar en grupos y directos)
+    private val userNameByUid = mutableMapOf<String, String>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,65 +74,108 @@ class ChatActivity : AppCompatActivity() {
         currentUid = user.uid
         currentEmail = prefs.getString("user_email", user.email) ?: user.email
 
-        otherEmail = intent.getStringExtra(EXTRA_OTHER_EMAIL)
-        if (otherEmail.isNullOrBlank()) {
-            Toast.makeText(this, "Falta email del destinatario", Toast.LENGTH_SHORT).show()
+        conversationId = intent.getStringExtra(EXTRA_CONVERSATION_ID)
+        isGroup = intent.getBooleanExtra(EXTRA_IS_GROUP, false)
+        val initialTitle = intent.getStringExtra(EXTRA_CHAT_TITLE)
+
+        if (!initialTitle.isNullOrBlank()) {
+            txtChatTitle.text = initialTitle
+        }
+
+        // Compat: si no viene conversationId pero sí email (flujo viejo)
+        otherEmailForDirect = intent.getStringExtra(EXTRA_OTHER_EMAIL)
+        if (conversationId == null && !otherEmailForDirect.isNullOrBlank()) {
+            // Creamos/obtenemos convId determinístico entre 2 usuarios
+            createOrResolveDirectConversationForEmail(otherEmailForDirect!!)
+        } else if (conversationId != null) {
+            // Modo nuevo: ya tenemos conversación
+            attachConversationListener(conversationId!!)
+            startListeningMessages()
+            markConversationAsRead()
+        } else {
+            Toast.makeText(this, "Falta información de la conversación", Toast.LENGTH_SHORT).show()
             finish()
             return
         }
-
-        txtChatTitle.text = otherEmail
-
-        // 1) Buscar el usuario destino en la colección "users" por email
-        db.collection("users")
-            .whereEqualTo("email", otherEmail)
-            .limit(1)
-            .get()
-            .addOnSuccessListener { qs ->
-                if (qs.isEmpty) {
-                    Toast.makeText(
-                        this,
-                        "No se encontró usuario con ese email",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                    finish()
-                    return@addOnSuccessListener
-                }
-
-                val doc = qs.documents[0]
-                otherUid = doc.getString("uid") ?: doc.id
-                val firstName = doc.getString("firstName") ?: ""
-                val lastName = doc.getString("lastName") ?: ""
-                otherDisplayName = (firstName + " " + lastName).trim()
-
-                if (otherDisplayName.isNotEmpty()) {
-                    txtChatTitle.text = otherDisplayName
-                }
-
-                // 2) Generar ID determinístico de conversación y empezar a escuchar mensajes
-                val me = currentUid ?: return@addOnSuccessListener
-                val other = otherUid ?: return@addOnSuccessListener
-                conversationId = conversationIdFor(me, other)
-                startListeningMessages()
-            }
-            .addOnFailureListener { e ->
-                Toast.makeText(
-                    this,
-                    "Error buscando usuario destino: ${e.localizedMessage}",
-                    Toast.LENGTH_LONG
-                ).show()
-                finish()
-            }
 
         btnSend.setOnClickListener {
             sendMessage()
         }
     }
 
-    private fun conversationIdFor(u1: String, u2: String): String {
-        return if (u1 < u2) "${u1}_$u2" else "${u2}_$u1"
+    // -------------------------------------------------------------
+    //   Conversación (información general)
+    // -------------------------------------------------------------
+    private fun attachConversationListener(convId: String) {
+        conversationListener?.remove()
+        conversationListener = db.collection("conversations")
+            .document(convId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Toast.makeText(
+                        this,
+                        "Error leyendo conversación: ${error.localizedMessage}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    return@addSnapshotListener
+                }
+
+                if (snapshot == null || !snapshot.exists()) {
+                    Toast.makeText(this, "La conversación ya no existe", Toast.LENGTH_SHORT).show()
+                    finish()
+                    return@addSnapshotListener
+                }
+
+                val data = snapshot.data ?: return@addSnapshotListener
+
+                val type = data["type"] as? String ?: "direct"
+                isGroup = type == "group"
+
+                val name = data["name"] as? String
+                if (isGroup && !name.isNullOrBlank()) {
+                    txtChatTitle.text = name
+                }
+
+                @Suppress("UNCHECKED_CAST")
+                val participants = (data["participants"] as? List<*>)?.mapNotNull { it as? String }
+                    ?: emptyList()
+
+                // Cargar nombres de participantes (grupos)
+                loadParticipantNames(participants)
+            }
     }
 
+    private fun loadParticipantNames(participants: List<String>) {
+        if (participants.isEmpty()) return
+
+        // Pequeña optimización: si ya tenemos nombres para todos, no hacemos nada
+        val missing = participants.filter { !userNameByUid.containsKey(it) }
+        if (missing.isEmpty()) return
+
+        // whereIn soporta hasta 10 elementos, pero los grupos serán pequeños
+        val chunk = missing.take(10)
+
+        db.collection("users")
+            .whereIn("uid", chunk)
+            .get()
+            .addOnSuccessListener { qs ->
+                for (doc in qs.documents) {
+                    val uid = doc.getString("uid") ?: continue
+                    val email = doc.getString("email") ?: uid
+                    val first = doc.getString("firstName") ?: ""
+                    val last = doc.getString("lastName") ?: ""
+                    val name = (first + " " + last).trim().ifEmpty { email }
+                    userNameByUid[uid] = name
+                }
+
+                // Refrescamos mensajes para que se vean nombres en lugar de "Otro"
+                refreshMessagesLabels()
+            }
+    }
+
+    // -------------------------------------------------------------
+    //   Mensajes
+    // -------------------------------------------------------------
     private fun startListeningMessages() {
         val convId = conversationId ?: return
 
@@ -144,72 +195,109 @@ class ChatActivity : AppCompatActivity() {
                 }
 
                 messages.clear()
-                var hasMessages = false
-
                 if (snapshot != null) {
                     for (doc in snapshot.documents) {
                         val text = doc.getString("text") ?: ""
                         val fromUid = doc.getString("fromUid") ?: ""
-                        val label = if (fromUid == currentUid) {
-                            "Yo"
-                        } else if (otherDisplayName.isNotBlank()) {
-                            otherDisplayName
-                        } else {
-                            otherEmail ?: "Otro"
-                        }
-                        messages.add("$label: $text")
+                        messages.add(buildLabelForMessage(fromUid, text))
                     }
-                    // 🔧 Corregido: usamos !snapshot.isEmpty en vez de isNotEmpty
-                    hasMessages = !snapshot.isEmpty
                 }
-
                 adapter.notifyDataSetChanged()
-                // scrollear al final
+
                 if (messages.isNotEmpty()) {
                     listMessages.post {
                         listMessages.setSelection(messages.size - 1)
                     }
                 }
 
-                // Marcar esta conversación como leída cuando hay mensajes
-                if (hasMessages) {
-                    markConversationAsRead()
+                markConversationAsRead()
+            }
+    }
+
+    private fun buildLabelForMessage(fromUid: String, text: String): String {
+        val me = currentUid
+
+        val senderName = when {
+            fromUid.isEmpty() -> ""
+            me != null && fromUid == me -> "Yo"
+            else -> {
+                // si es grupo, buscamos por uid
+                if (isGroup) {
+                    userNameByUid[fromUid] ?: "Otro"
+                } else {
+                    // directo: usamos título o nombre cacheado
+                    userNameByUid[fromUid]
+                        ?: txtChatTitle.text?.toString()
+                        ?: "Otro"
+                }
+            }
+        }
+
+        return if (senderName.isNotEmpty()) {
+            "$senderName: $text"
+        } else {
+            text
+        }
+    }
+
+    private fun refreshMessagesLabels() {
+        // Re-generamos los textos usando buildLabelForMessage
+        val convId = conversationId ?: return
+
+        db.collection("conversations")
+            .document(convId)
+            .collection("messages")
+            .orderBy("createdAt", Query.Direction.ASCENDING)
+            .get()
+            .addOnSuccessListener { snapshot ->
+                messages.clear()
+                for (doc in snapshot.documents) {
+                    val text = doc.getString("text") ?: ""
+                    val fromUid = doc.getString("fromUid") ?: ""
+                    messages.add(buildLabelForMessage(fromUid, text))
+                }
+                adapter.notifyDataSetChanged()
+                if (messages.isNotEmpty()) {
+                    listMessages.post {
+                        listMessages.setSelection(messages.size - 1)
+                    }
                 }
             }
     }
 
-    // Actualizar readStatus[currentUid] con serverTimestamp
     private fun markConversationAsRead() {
-        val convId = conversationId ?: return
         val uid = currentUid ?: return
+        val convId = conversationId ?: return
 
-        val update = hashMapOf(
-            "readStatus" to hashMapOf(
-                uid to FieldValue.serverTimestamp()
-            )
+        val update = mapOf(
+            "readStatus.$uid" to FieldValue.serverTimestamp()
         )
-
         db.collection("conversations")
             .document(convId)
             .set(update, SetOptions.merge())
     }
 
+    // -------------------------------------------------------------
+    //   Enviar mensaje
+    // -------------------------------------------------------------
     private fun sendMessage() {
         val text = edtMessage.text.toString().trim()
         if (text.isEmpty()) return
 
         val from = currentUid ?: return
-        val to = otherUid ?: return
-        val convId = conversationId ?: return
+        val convId = conversationId
+
+        if (convId == null) {
+            Toast.makeText(this, "No se encontró la conversación", Toast.LENGTH_SHORT).show()
+            return
+        }
 
         val msg = hashMapOf(
             "fromUid" to from,
-            "toUid" to to,
             "text" to text,
             "createdAt" to FieldValue.serverTimestamp()
         )
 
-        // 1) Guardar mensaje en subcolección
         db.collection("conversations")
             .document(convId)
             .collection("messages")
@@ -225,10 +313,7 @@ class ChatActivity : AppCompatActivity() {
                 ).show()
             }
 
-        // 2) Actualizar resumen de la conversación
         val summary = hashMapOf(
-            "participants" to listOf(from, to),
-            "participantEmails" to listOfNotNull(currentEmail, otherEmail),
             "lastMessage" to text,
             "lastTimestamp" to FieldValue.serverTimestamp()
         )
@@ -238,8 +323,81 @@ class ChatActivity : AppCompatActivity() {
             .set(summary, SetOptions.merge())
     }
 
+    // -------------------------------------------------------------
+    //   Compat: crear/obtener conversación directa usando email
+    // -------------------------------------------------------------
+    private fun createOrResolveDirectConversationForEmail(email: String) {
+        val meUid = currentUid ?: return
+
+        // Buscamos usuario por email
+        db.collection("users")
+            .whereEqualTo("email", email)
+            .limit(1)
+            .get()
+            .addOnSuccessListener { qs ->
+                if (qs.isEmpty) {
+                    Toast.makeText(
+                        this,
+                        "No se encontró usuario con ese email",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    finish()
+                    return@addOnSuccessListener
+                }
+
+                val userDoc = qs.documents[0]
+                val otherUid = userDoc.getString("uid") ?: userDoc.id
+
+                val convId = conversationIdFor(meUid, otherUid)
+                conversationId = convId
+                isGroup = false
+
+                // Aseguramos que exista el doc de conversación
+                val myEmail = currentEmail
+                val otherEmail = email
+
+                val data = hashMapOf(
+                    "type" to "direct",
+                    "participants" to listOf(meUid, otherUid),
+                    "participantEmails" to listOfNotNull(myEmail, otherEmail),
+                    "lastMessage" to "",
+                    "lastTimestamp" to FieldValue.serverTimestamp()
+                )
+
+                db.collection("conversations")
+                    .document(convId)
+                    .set(data, SetOptions.merge())
+                    .addOnSuccessListener {
+                        attachConversationListener(convId)
+                        startListeningMessages()
+                    }
+                    .addOnFailureListener { e ->
+                        Toast.makeText(
+                            this,
+                            "Error creando conversación: ${e.localizedMessage}",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        finish()
+                    }
+            }
+            .addOnFailureListener { e ->
+                Toast.makeText(
+                    this,
+                    "Error buscando usuario: ${e.localizedMessage}",
+                    Toast.LENGTH_SHORT
+                ).show()
+                finish()
+            }
+    }
+
+    private fun conversationIdFor(u1: String, u2: String): String {
+        return if (u1 < u2) "${u1}_$2" else "${u2}_$u1"
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         messagesListener?.remove()
+        conversationListener?.remove()
     }
 }
+

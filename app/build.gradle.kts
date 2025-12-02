@@ -55,7 +55,7 @@ dependencies {
     // Firebase (YA LO TENÍAS)
     implementation(platform(libs.firebase.bom))      // BOM
     implementation(libs.firebase.firestore.ktx)     // Firestore
-    implementation(libs.firebase.auth.ktx) // 🔥 NUEVO: Auth
+    implementation(libs.firebase.auth.ktx) // 🔥 NUEVO: Authgit
 
     // Futures + Guava para ListenableFuture
     implementation(libs.androidx.concurrent.futures)

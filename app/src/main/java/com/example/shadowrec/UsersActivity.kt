@@ -5,30 +5,40 @@ import android.os.Bundle
 import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
-import com.google.firebase.auth.FirebaseAuth           // === NUEVO
+import com.google.firebase.Timestamp
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
-import com.google.firebase.Timestamp                 // === NUEVO
 
 class UsersActivity : AppCompatActivity() {
 
-    private lateinit var listUsers: ListView
+    private lateinit var listUsers: ListView          // ahora lista de CHATS
     private lateinit var progressUsers: ProgressBar
+    private lateinit var btnNewChat: Button
     private lateinit var adapter: ArrayAdapter<String>
 
     private val db by lazy { Firebase.firestore }
-    private val auth by lazy { FirebaseAuth.getInstance() }   // === NUEVO
+    private val auth by lazy { FirebaseAuth.getInstance() }
+    private val prefs by lazy {
+        getSharedPreferences("shadowrec_prefs", MODE_PRIVATE)
+    }
 
-    private var currentUid: String? = null                    // === NUEVO
+    private var currentUid: String? = null
+    private var currentEmail: String? = null
 
-    // Modelo simple para la lista
-    private val users = mutableListOf<UserItem>()
+    // Mapa email -> nombre completo (se carga una sola vez)
+    private val userNameByEmail = mutableMapOf<String, String>()
 
-    data class UserItem(
-        val uid: String,
-        val name: String,
-        val email: String
+    data class ConversationItem(
+        val id: String,
+        val type: String,             // "direct" o "group"
+        var title: String,            // nombre grupo o persona
+        val lastMessage: String,
+        val hasUnread: Boolean,
+        val participantEmails: List<String>
     )
+
+    private val conversations = mutableListOf<ConversationItem>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,6 +46,7 @@ class UsersActivity : AppCompatActivity() {
 
         listUsers = findViewById(R.id.listUsers)
         progressUsers = findViewById(R.id.progressUsers)
+        btnNewChat = findViewById(R.id.btnNewChat)
 
         adapter = ArrayAdapter(
             this,
@@ -44,131 +55,163 @@ class UsersActivity : AppCompatActivity() {
         )
         listUsers.adapter = adapter
 
-        val user = auth.currentUser                      // === NUEVO
-        if (user == null) {                              // === NUEVO
+        val user = auth.currentUser
+        if (user == null) {
             Toast.makeText(this, "No hay usuario logueado", Toast.LENGTH_SHORT).show()
             finish()
             return
         }
-        currentUid = user.uid                            // === NUEVO
+        currentUid = user.uid
+        currentEmail = prefs.getString("user_email", user.email) ?: user.email
 
-        // Cargar usuarios desde Firestore
-        loadUsers()
-
-        // Al hacer tap en un usuario → abrir ChatActivity con su email
+        // Tap sobre un chat -> abrir ChatActivity
         listUsers.setOnItemClickListener { _, _, position, _ ->
-            val userItem = users[position]
+            val conv = conversations.getOrNull(position) ?: return@setOnItemClickListener
+
             val i = Intent(this, ChatActivity::class.java).apply {
-                putExtra(ChatActivity.EXTRA_OTHER_EMAIL, userItem.email)
+                putExtra(ChatActivity.EXTRA_CONVERSATION_ID, conv.id)
+                putExtra(ChatActivity.EXTRA_IS_GROUP, conv.type == "group")
+                putExtra(ChatActivity.EXTRA_CHAT_TITLE, conv.title)
             }
             startActivity(i)
         }
+
+        // Botón "Nuevo chat"
+        btnNewChat.setOnClickListener {
+            val i = Intent(this, NewChatActivity::class.java)
+            startActivity(i)
+        }
+
+        loadConversations()
     }
 
     override fun onResume() {
         super.onResume()
-        // Cada vez que volvés a esta pantalla, recargamos la lista
-        loadUsers()
+        // Refrescamos al volver desde un chat o desde nuevo chat
+        loadConversations()
     }
 
-    private fun loadUsers() {
-        progressUsers.visibility = View.VISIBLE
-
-        db.collection("users")
-            .orderBy("firstName") // si no existe en todos, no pasa nada grave
-            .get()
-            .addOnSuccessListener { qs ->
-                users.clear()
-
-                for (doc in qs.documents) {
-                    val uid = doc.getString("uid") ?: doc.id
-                    val first = doc.getString("firstName") ?: ""
-                    val last = doc.getString("lastName") ?: ""
-                    val email = doc.getString("email") ?: ""
-                    val name = (first + " " + last).trim().ifEmpty { email }
-
-                    users.add(UserItem(uid, name, email))
-                }
-
-                // Una vez que tenemos la lista de usuarios, consultamos las conversaciones
-                loadUnreadStatusForUsers()               // === NUEVO
-            }
-            .addOnFailureListener { e ->
-                Toast.makeText(
-                    this,
-                    "Error cargando usuarios: ${e.localizedMessage}",
-                    Toast.LENGTH_LONG
-                ).show()
-
-                // Si falla, igual mostramos la lista sin indicadores
-                updateUserLabels(emptyMap())            // === NUEVO
-            }
-            .addOnCompleteListener {
-                progressUsers.visibility = View.GONE
-            }
-    }
-
-    // === NUEVO: cargar conversaciones y calcular qué usuarios tienen mensajes sin leer
-    private fun loadUnreadStatusForUsers() {
+    private fun loadConversations() {
         val uid = currentUid ?: run {
-            updateUserLabels(emptyMap())
+            Toast.makeText(this, "No hay usuario logueado", Toast.LENGTH_SHORT).show()
             return
         }
 
+        progressUsers.visibility = View.VISIBLE
+        conversations.clear()
+
+        // 1) Traemos TODOS los usuarios una vez para armar mapa email -> nombre
+        db.collection("users")
+            .get()
+            .addOnSuccessListener { qs ->
+                userNameByEmail.clear()
+                for (doc in qs.documents) {
+                    val email = doc.getString("email") ?: continue
+                    val first = doc.getString("firstName") ?: ""
+                    val last = doc.getString("lastName") ?: ""
+                    val name = (first + " " + last).trim().ifEmpty { email }
+                    userNameByEmail[email] = name
+                }
+                // 2) Ahora sí, traemos las conversaciones del usuario
+                loadConversationsForUser(uid)
+            }
+            .addOnFailureListener {
+                // Si falla, igual intentamos cargar las conversaciones (usando email como título)
+                loadConversationsForUser(uid)
+            }
+    }
+
+    private fun loadConversationsForUser(uid: String) {
         db.collection("conversations")
             .whereArrayContains("participants", uid)
             .get()
             .addOnSuccessListener { qs ->
-                val unreadByOther = mutableMapOf<String, Boolean>()
+                conversations.clear()
 
                 for (doc in qs.documents) {
-                    val participants = doc.get("participants") as? List<*> ?: continue
-                    if (participants.size < 2) continue
+                    val id = doc.id
+                    val type = doc.getString("type") ?: "direct"
+                    val isGroup = type == "group"
 
-                    val u1 = participants.getOrNull(0) as? String
-                    val u2 = participants.getOrNull(1) as? String
-
-                    // identificamos el "otro" participante (no currentUid)
-                    val otherUid =
-                        when (uid) {
-                            u1 -> u2
-                            u2 -> u1
-                            else -> null
-                        } ?: continue
-
+                    val lastMessage = doc.getString("lastMessage") ?: "(sin mensajes)"
                     val lastTs = doc.getTimestamp("lastTimestamp")
 
                     @Suppress("UNCHECKED_CAST")
                     val readStatusMap = doc.get("readStatus") as? Map<String, Any?>
                     val myReadTs = (readStatusMap?.get(uid) as? Timestamp)
 
-                    val hasUnread = lastTs != null && (myReadTs == null || lastTs > myReadTs)
+                    val hasUnread =
+                        lastTs != null && (myReadTs == null || lastTs > myReadTs)
 
-                    if (hasUnread) {
-                        unreadByOther[otherUid] = true
+                    @Suppress("UNCHECKED_CAST")
+                    val participantEmails =
+                        (doc.get("participantEmails") as? List<*>)?.mapNotNull { it as? String }
+                            ?: emptyList()
+
+                    val myEmail = currentEmail
+                    val otherEmailForDirect =
+                        if (!isGroup && myEmail != null) {
+                            participantEmails.firstOrNull { it != myEmail }
+                                ?: participantEmails.firstOrNull()
+                        } else null
+
+                    val title: String = if (isGroup) {
+                        doc.getString("name")
+                            ?: if (participantEmails.isNotEmpty()) {
+                                val nombres = participantEmails.map { email ->
+                                    userNameByEmail[email] ?: email
+                                }
+                                "Grupo: " + nombres.joinToString(", ")
+                            } else {
+                                "Chat grupal"
+                            }
+                    } else {
+                        val email = otherEmailForDirect
+                        if (email != null) {
+                            userNameByEmail[email] ?: email
+                        } else {
+                            "Chat directo"
+                        }
                     }
+
+                    conversations.add(
+                        ConversationItem(
+                            id = id,
+                            type = type,
+                            title = title,
+                            lastMessage = lastMessage,
+                            hasUnread = hasUnread,
+                            participantEmails = participantEmails
+                        )
+                    )
                 }
 
-                updateUserLabels(unreadByOther)
+                // Ordenamos por último mensaje (más reciente arriba)
+                conversations.sortByDescending { conv ->
+                    // Buscamos el timestamp en el doc otra vez
+                    qs.documents.firstOrNull { it.id == conv.id }?.getTimestamp("lastTimestamp")
+                        ?: Timestamp(0, 0)
+                }
+
+                refreshLabels()
             }
             .addOnFailureListener { e ->
                 Toast.makeText(
                     this,
-                    "Error leyendo conversaciones: ${e.localizedMessage}",
-                    Toast.LENGTH_SHORT
+                    "Error cargando chats: ${e.localizedMessage}",
+                    Toast.LENGTH_LONG
                 ).show()
-                updateUserLabels(emptyMap())
+                refreshLabels()
+            }
+            .addOnCompleteListener {
+                progressUsers.visibility = View.GONE
             }
     }
 
-    // === NUEVO: reconstruir los textos de la lista, agregando “🔴 NUEVO” donde corresponda
-    private fun updateUserLabels(unreadByOther: Map<String, Boolean>) {
-        val labels = mutableListOf<String>()
-
-        for (u in users) {
-            val hasUnread = unreadByOther[u.uid] == true
-            val suffix = if (hasUnread) "\n🔴 NUEVO" else ""
-            labels.add("${u.name}\n${u.email}$suffix")
+    private fun refreshLabels() {
+        val labels = conversations.map { conv ->
+            val unreadSuffix = if (conv.hasUnread) "\n🔴 NUEVO" else ""
+            "${conv.title}\n${conv.lastMessage}$unreadSuffix"
         }
 
         adapter.clear()
@@ -176,3 +219,4 @@ class UsersActivity : AppCompatActivity() {
         adapter.notifyDataSetChanged()
     }
 }
+

@@ -5,28 +5,27 @@
     android:layout_height="match_parent"
     android:padding="12dp">
 
-    <!-- Título -->
     <TextView
-        android:id="@+id/txtUsersTitle"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Chats"
-        android:textStyle="bold"
-        android:textSize="18sp"
-        android:paddingBottom="8dp"
-        android:layout_marginTop="20dp" />
-
-    <!-- Botón Nuevo chat -->
-    <Button
-        android:id="@+id/btnNewChat"
+        android:id="@+id/txtNewChatTitle"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="Nuevo chat"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:layout_marginTop="20dp"
+        android:paddingBottom="8dp" />
+
+    <!-- Nombre del grupo (solo se usa si hay más de un invitado) -->
+    <EditText
+        android:id="@+id/edtGroupName"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Nombre del grupo (opcional)"
+        android:inputType="textCapWords"
         android:layout_marginBottom="8dp" />
 
-    <!-- Loader -->
     <ProgressBar
-        android:id="@+id/progressUsers"
+        android:id="@+id/progressSelectableUsers"
         style="?android:attr/progressBarStyleLarge"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
@@ -34,13 +33,21 @@
         android:visibility="gone"
         android:padding="8dp" />
 
-    <!-- Lista de conversaciones -->
     <ListView
-        android:id="@+id/listUsers"
+        android:id="@+id/listSelectableUsers"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
         android:divider="@android:color/darker_gray"
         android:dividerHeight="1dp" />
 
+    <Button
+        android:id="@+id/btnCreateChat"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Crear chat"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="8dp" />
+
 </LinearLayout>
+
