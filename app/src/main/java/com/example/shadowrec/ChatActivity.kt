@@ -11,6 +11,8 @@ import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
+import java.text.SimpleDateFormat
+import java.util.Locale
 
 class ChatActivity : AppCompatActivity() {
 
@@ -199,7 +201,8 @@ class ChatActivity : AppCompatActivity() {
                     for (doc in snapshot.documents) {
                         val text = doc.getString("text") ?: ""
                         val fromUid = doc.getString("fromUid") ?: ""
-                        messages.add(buildLabelForMessage(fromUid, text))
+                        val createdAt = doc.getTimestamp("createdAt")
+                        messages.add(buildLabelForMessage(fromUid, text, createdAt))
                     }
                 }
                 adapter.notifyDataSetChanged()
@@ -214,7 +217,11 @@ class ChatActivity : AppCompatActivity() {
             }
     }
 
-    private fun buildLabelForMessage(fromUid: String, text: String): String {
+    private fun buildLabelForMessage(
+        fromUid: String,
+        text: String,
+        createdAt: Timestamp?
+    ): String {
         val me = currentUid
 
         val senderName = when {
@@ -233,11 +240,25 @@ class ChatActivity : AppCompatActivity() {
             }
         }
 
-        return if (senderName.isNotEmpty()) {
+        val timePart = formatMsgTimestamp(createdAt)
+
+        val base = if (senderName.isNotEmpty()) {
             "$senderName: $text"
         } else {
             text
         }
+
+        return if (timePart.isNotEmpty()) {
+            "$base  $timePart"
+        } else {
+            base
+        }
+    }
+
+    private fun formatMsgTimestamp(ts: Timestamp?): String {
+        if (ts == null) return ""
+        val df = SimpleDateFormat("dd/MM/yy HH:mm", Locale.getDefault())
+        return df.format(ts.toDate())   // ej: "03/12 16:05"
     }
 
     private fun refreshMessagesLabels() {
@@ -254,7 +275,8 @@ class ChatActivity : AppCompatActivity() {
                 for (doc in snapshot.documents) {
                     val text = doc.getString("text") ?: ""
                     val fromUid = doc.getString("fromUid") ?: ""
-                    messages.add(buildLabelForMessage(fromUid, text))
+                    val createdAt = doc.getTimestamp("createdAt")
+                    messages.add(buildLabelForMessage(fromUid, text, createdAt))
                 }
                 adapter.notifyDataSetChanged()
                 if (messages.isNotEmpty()) {
@@ -315,7 +337,8 @@ class ChatActivity : AppCompatActivity() {
 
         val summary = hashMapOf(
             "lastMessage" to text,
-            "lastTimestamp" to FieldValue.serverTimestamp()
+            "lastTimestamp" to FieldValue.serverTimestamp(),
+            "lastFromUid" to from              // 👈 quién mandó el último mensaje
         )
 
         db.collection("conversations")
@@ -391,7 +414,8 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun conversationIdFor(u1: String, u2: String): String {
-        return if (u1 < u2) "${u1}_$2" else "${u2}_$u1"
+        // corregido: ID determinístico usando ambos UIDs
+        return if (u1 < u2) "${u1}_$u2" else "${u2}_$u1"
     }
 
     override fun onDestroy() {
@@ -400,4 +424,3 @@ class ChatActivity : AppCompatActivity() {
         conversationListener?.remove()
     }
 }
-

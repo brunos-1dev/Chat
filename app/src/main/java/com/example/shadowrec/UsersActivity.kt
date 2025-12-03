@@ -7,8 +7,13 @@ import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
+import androidx.appcompat.app.AlertDialog
+
+
+
 
 class UsersActivity : AppCompatActivity() {
 
@@ -23,6 +28,11 @@ class UsersActivity : AppCompatActivity() {
         getSharedPreferences("shadowrec_prefs", MODE_PRIVATE)
     }
 
+    // prefs locales solo para “NUEVO” por dispositivo
+    private val convoPrefs by lazy {
+        getSharedPreferences("shadowrec_conversations", MODE_PRIVATE)
+    }
+
     private var currentUid: String? = null
     private var currentEmail: String? = null
 
@@ -33,9 +43,10 @@ class UsersActivity : AppCompatActivity() {
         val id: String,
         val type: String,             // "direct" o "group"
         var title: String,            // nombre grupo o persona
-        val lastMessage: String,
-        val hasUnread: Boolean,
-        val participantEmails: List<String>
+        var lastMessage: String,
+        var hasUnread: Boolean,
+        val participantEmails: List<String>,
+        var lastTimestamp: Timestamp? // para manejar leído local
     )
 
     private val conversations = mutableListOf<ConversationItem>()
@@ -64,9 +75,15 @@ class UsersActivity : AppCompatActivity() {
         currentUid = user.uid
         currentEmail = prefs.getString("user_email", user.email) ?: user.email
 
-        // Tap sobre un chat -> abrir ChatActivity
+        // Tap corto -> abrir chat y marcar leído local
         listUsers.setOnItemClickListener { _, _, position, _ ->
             val conv = conversations.getOrNull(position) ?: return@setOnItemClickListener
+
+            if (conv.hasUnread) {
+                conv.hasUnread = false
+                markConversationLocallyRead(conv)
+                refreshLabels()
+            }
 
             val i = Intent(this, ChatActivity::class.java).apply {
                 putExtra(ChatActivity.EXTRA_CONVERSATION_ID, conv.id)
@@ -74,6 +91,25 @@ class UsersActivity : AppCompatActivity() {
                 putExtra(ChatActivity.EXTRA_CHAT_TITLE, conv.title)
             }
             startActivity(i)
+        }
+
+        // Tap largo -> eliminar (ocultar) chat para este usuario
+        listUsers.setOnItemLongClickListener { _, _, position, _ ->
+            val conv = conversations.getOrNull(position) ?: return@setOnItemLongClickListener true
+
+            AlertDialog.Builder(this)
+                .setTitle("Eliminar chat")
+                .setMessage(
+                    "¿Querés eliminar este chat de tu lista?\n\n" +
+                            "No se borrará para los demás participantes."
+                )
+                .setPositiveButton("Eliminar") { _, _ ->
+                    deleteConversationForUser(conv)
+                }
+                .setNegativeButton("Cancelar", null)
+                .show()
+
+            true
         }
 
         // Botón "Nuevo chat"
@@ -133,15 +169,31 @@ class UsersActivity : AppCompatActivity() {
                     val type = doc.getString("type") ?: "direct"
                     val isGroup = type == "group"
 
+                    // Si la conversación está oculta para este usuario, la saltamos
+                    @Suppress("UNCHECKED_CAST")
+                    val hiddenFor =
+                        (doc.get("hiddenFor") as? List<*>)?.mapNotNull { it as? String }
+                            ?: emptyList()
+                    if (hiddenFor.contains(uid)) {
+                        continue
+                    }
+
                     val lastMessage = doc.getString("lastMessage") ?: "(sin mensajes)"
                     val lastTs = doc.getTimestamp("lastTimestamp")
+                    val lastFromUid = doc.getString("lastFromUid") // puede ser null en chats viejos
 
-                    @Suppress("UNCHECKED_CAST")
-                    val readStatusMap = doc.get("readStatus") as? Map<String, Any?>
-                    val myReadTs = (readStatusMap?.get(uid) as? Timestamp)
+                    // --- LÓGICA LOCAL DE "NUEVO" ---
+                    val lastServerMillis = lastTs?.toDate()?.time ?: 0L
+                    val localKey = "last_read_$id"
+                    val localReadMillis = convoPrefs.getLong(localKey, 0L)
 
-                    val hasUnread =
-                        lastTs != null && (myReadTs == null || lastTs > myReadTs)
+                    // Lo mismo que tenías antes: ¿hay algo más nuevo que lo último que leí localmente?
+                    val baseHasUnread =
+                        lastTs != null && lastServerMillis > localReadMillis
+
+                    // Extra: si el último mensaje lo escribí YO, no lo marco como nuevo
+                    val hasUnread = baseHasUnread && lastFromUid != uid
+                    // --------------------------------
 
                     @Suppress("UNCHECKED_CAST")
                     val participantEmails =
@@ -181,16 +233,15 @@ class UsersActivity : AppCompatActivity() {
                             title = title,
                             lastMessage = lastMessage,
                             hasUnread = hasUnread,
-                            participantEmails = participantEmails
+                            participantEmails = participantEmails,
+                            lastTimestamp = lastTs
                         )
                     )
                 }
 
                 // Ordenamos por último mensaje (más reciente arriba)
                 conversations.sortByDescending { conv ->
-                    // Buscamos el timestamp en el doc otra vez
-                    qs.documents.firstOrNull { it.id == conv.id }?.getTimestamp("lastTimestamp")
-                        ?: Timestamp(0, 0)
+                    conv.lastTimestamp ?: Timestamp(0, 0)
                 }
 
                 refreshLabels()
@@ -208,6 +259,42 @@ class UsersActivity : AppCompatActivity() {
             }
     }
 
+
+    private fun markConversationLocallyRead(conv: ConversationItem) {
+        val millis = conv.lastTimestamp?.toDate()?.time ?: System.currentTimeMillis()
+        val key = "last_read_${conv.id}"
+        convoPrefs.edit().putLong(key, millis).apply()
+    }
+
+    private fun deleteConversationForUser(conv: ConversationItem) {
+        val uid = currentUid ?: return
+        val convId = conv.id
+
+        // 1) Marcarla oculta en Firestore para este usuario
+        db.collection("conversations")
+            .document(convId)
+            .update("hiddenFor", FieldValue.arrayUnion(uid))
+            .addOnSuccessListener {
+                // 2) Limpiar read local
+                val key = "last_read_$convId"
+                convoPrefs.edit().remove(key).apply()
+
+                // 3) Sacarla de la lista local
+                val idx = conversations.indexOfFirst { it.id == convId }
+                if (idx != -1) {
+                    conversations.removeAt(idx)
+                    refreshLabels()
+                }
+            }
+            .addOnFailureListener { e ->
+                Toast.makeText(
+                    this,
+                    "Error al eliminar chat: ${e.localizedMessage}",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+    }
+
     private fun refreshLabels() {
         val labels = conversations.map { conv ->
             val unreadSuffix = if (conv.hasUnread) "\n🔴 NUEVO" else ""
@@ -219,4 +306,3 @@ class UsersActivity : AppCompatActivity() {
         adapter.notifyDataSetChanged()
     }
 }
-
