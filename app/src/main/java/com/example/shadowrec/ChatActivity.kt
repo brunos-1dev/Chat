@@ -1,8 +1,13 @@
 package com.example.shadowrec
 
 import android.os.Bundle
+import android.view.Gravity
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
@@ -11,8 +16,7 @@ import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
-import java.text.SimpleDateFormat
-import java.util.Locale
+import java.util.Calendar
 
 class ChatActivity : AppCompatActivity() {
 
@@ -28,13 +32,21 @@ class ChatActivity : AppCompatActivity() {
     private lateinit var edtMessage: EditText
     private lateinit var btnSend: Button
 
-    private val messages = mutableListOf<String>()
-    private lateinit var adapter: ArrayAdapter<String>
+    // Ahora usamos una lista de filas ricas (mensaje + hora + quién)
+    private val messages = mutableListOf<ChatMessageRow>()
+    private lateinit var adapter: ChatMessagesAdapter
 
     private val auth by lazy { FirebaseAuth.getInstance() }
     private val db by lazy { Firebase.firestore }
+
+    // Preferencias de usuario (ya las tenías)
     private val prefs by lazy {
         getSharedPreferences("shadowrec_prefs", MODE_PRIVATE)
+    }
+
+    // Preferencias locales para NUEVO (coincide con UsersActivity)
+    private val convoPrefs by lazy {
+        getSharedPreferences("shadowrec_conversations", MODE_PRIVATE)
     }
 
     private var currentUid: String? = null
@@ -51,6 +63,13 @@ class ChatActivity : AppCompatActivity() {
     // uid -> nombre (para mostrar en grupos y directos)
     private val userNameByUid = mutableMapOf<String, String>()
 
+    // Datos para cada fila del ListView
+    data class ChatMessageRow(
+        val fromUid: String,
+        val labelText: String,     // "Yo: hola" o "Mariano: hola"
+        val createdAt: Timestamp?  // para mostrar hora/fecha
+    )
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_chat)
@@ -60,11 +79,7 @@ class ChatActivity : AppCompatActivity() {
         edtMessage = findViewById(R.id.edtMessage)
         btnSend = findViewById(R.id.btnSend)
 
-        adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_list_item_1,
-            messages
-        )
+        adapter = ChatMessagesAdapter(messages)
         listMessages.adapter = adapter
 
         val user = auth.currentUser
@@ -202,7 +217,15 @@ class ChatActivity : AppCompatActivity() {
                         val text = doc.getString("text") ?: ""
                         val fromUid = doc.getString("fromUid") ?: ""
                         val createdAt = doc.getTimestamp("createdAt")
-                        messages.add(buildLabelForMessage(fromUid, text, createdAt))
+
+                        val label = buildLabelForMessage(fromUid, text)
+                        messages.add(
+                            ChatMessageRow(
+                                fromUid = fromUid,
+                                labelText = label,
+                                createdAt = createdAt
+                            )
+                        )
                     }
                 }
                 adapter.notifyDataSetChanged()
@@ -217,49 +240,33 @@ class ChatActivity : AppCompatActivity() {
             }
     }
 
-    private fun buildLabelForMessage(
-        fromUid: String,
-        text: String,
-        createdAt: Timestamp?
-    ): String {
+    private fun buildLabelForMessage(fromUid: String, text: String): String {
         val me = currentUid
 
         val senderName = when {
             fromUid.isEmpty() -> ""
-            me != null && fromUid == me -> "Yo"
+            // Mensajes míos (tanto en grupo como directos) -> sin "Yo"
+            me != null && fromUid == me -> {
+                ""
+            }
             else -> {
-                // si es grupo, buscamos por uid
                 if (isGroup) {
+                    // En grupos: mostrar nombre de la otra persona
                     userNameByUid[fromUid] ?: "Otro"
                 } else {
-                    // directo: usamos título o nombre cacheado
-                    userNameByUid[fromUid]
-                        ?: txtChatTitle.text?.toString()
-                        ?: "Otro"
+                    // En chats directos: sin nombre, solo el texto
+                    ""
                 }
             }
         }
 
-        val timePart = formatMsgTimestamp(createdAt)
-
-        val base = if (senderName.isNotEmpty()) {
+        return if (senderName.isNotEmpty()) {
             "$senderName: $text"
         } else {
             text
         }
-
-        return if (timePart.isNotEmpty()) {
-            "$base  $timePart"
-        } else {
-            base
-        }
     }
 
-    private fun formatMsgTimestamp(ts: Timestamp?): String {
-        if (ts == null) return ""
-        val df = SimpleDateFormat("dd/MM/yy HH:mm", Locale.getDefault())
-        return df.format(ts.toDate())   // ej: "03/12 16:05"
-    }
 
     private fun refreshMessagesLabels() {
         // Re-generamos los textos usando buildLabelForMessage
@@ -276,7 +283,15 @@ class ChatActivity : AppCompatActivity() {
                     val text = doc.getString("text") ?: ""
                     val fromUid = doc.getString("fromUid") ?: ""
                     val createdAt = doc.getTimestamp("createdAt")
-                    messages.add(buildLabelForMessage(fromUid, text, createdAt))
+
+                    val label = buildLabelForMessage(fromUid, text)
+                    messages.add(
+                        ChatMessageRow(
+                            fromUid = fromUid,
+                            labelText = label,
+                            createdAt = createdAt
+                        )
+                    )
                 }
                 adapter.notifyDataSetChanged()
                 if (messages.isNotEmpty()) {
@@ -291,6 +306,13 @@ class ChatActivity : AppCompatActivity() {
         val uid = currentUid ?: return
         val convId = conversationId ?: return
 
+        // Marca local para NUEVO (UsersActivity la usa con last_read_...)
+        val now = System.currentTimeMillis()
+        convoPrefs.edit()
+            .putLong("last_read_$convId", now)
+            .apply()
+
+        // Opcional: dejamos la marca en Firestore por compatibilidad
         val update = mapOf(
             "readStatus.$uid" to FieldValue.serverTimestamp()
         )
@@ -337,8 +359,7 @@ class ChatActivity : AppCompatActivity() {
 
         val summary = hashMapOf(
             "lastMessage" to text,
-            "lastTimestamp" to FieldValue.serverTimestamp(),
-            "lastFromUid" to from              // 👈 quién mandó el último mensaje
+            "lastTimestamp" to FieldValue.serverTimestamp()
         )
 
         db.collection("conversations")
@@ -414,7 +435,6 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun conversationIdFor(u1: String, u2: String): String {
-        // corregido: ID determinístico usando ambos UIDs
         return if (u1 < u2) "${u1}_$u2" else "${u2}_$u1"
     }
 
@@ -422,5 +442,69 @@ class ChatActivity : AppCompatActivity() {
         super.onDestroy()
         messagesListener?.remove()
         conversationListener?.remove()
+    }
+
+    // -------------------------------------------------------------
+    //   Adapter de mensajes con burbujas
+    // -------------------------------------------------------------
+    private inner class ChatMessagesAdapter(
+        private val items: List<ChatMessageRow>
+    ) : BaseAdapter() {
+
+        override fun getCount(): Int = items.size
+
+        override fun getItem(position: Int): ChatMessageRow = items[position]
+
+        override fun getItemId(position: Int): Long = position.toLong()
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val view = convertView ?: LayoutInflater.from(this@ChatActivity)
+                .inflate(R.layout.item_message, parent, false)
+
+            val root = view.findViewById<LinearLayout>(R.id.messageRowRoot)
+            val bubble = view.findViewById<LinearLayout>(R.id.messageBubble)
+            val txtBody = view.findViewById<TextView>(R.id.txtMessageBody)
+            val txtTime = view.findViewById<TextView>(R.id.txtMessageTime)
+
+            val item = getItem(position)
+            val myUid = currentUid
+            val isMine = myUid != null && item.fromUid == myUid
+
+            // Alineamos burbuja
+            root.gravity = if (isMine) Gravity.END else Gravity.START
+
+            // Fondo según quién envía
+            val bgRes = if (isMine) R.drawable.bg_message_me else R.drawable.bg_message_other
+            bubble.background = ContextCompat.getDrawable(this@ChatActivity, bgRes)
+
+            // Texto del mensaje (incluye "Yo: " o nombre si aplica)
+            txtBody.text = item.labelText
+
+            // Hora (y fecha si no es hoy)
+            val ts = item.createdAt
+            if (ts != null) {
+                val date = ts.toDate()
+
+                val msgCal = Calendar.getInstance().apply { time = date }
+                val nowCal = Calendar.getInstance()
+
+                val sameDay =
+                    msgCal.get(Calendar.YEAR) == nowCal.get(Calendar.YEAR) &&
+                            msgCal.get(Calendar.DAY_OF_YEAR) == nowCal.get(Calendar.DAY_OF_YEAR)
+
+                val timeStr = android.text.format.DateFormat.format("HH:mm", date).toString()
+                val dateStr =
+                    if (sameDay) ""
+                    else android.text.format.DateFormat.format("dd/MM", date).toString()
+
+                txtTime.text = if (dateStr.isEmpty()) timeStr else "$dateStr $timeStr"
+                txtTime.visibility = View.VISIBLE
+            } else {
+                txtTime.text = ""
+                txtTime.visibility = View.GONE
+            }
+
+            return view
+        }
     }
 }
