@@ -59,6 +59,9 @@
 
         <activity android:name=".NewChatActivity" />
 
+        <activity android:name=".RegisterActivity" />
+
+
 
         <!-- FileProvider para fotos/vídeos (ya existente) -->
         <provider
