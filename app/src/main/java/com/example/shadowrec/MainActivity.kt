@@ -77,6 +77,11 @@ class MainActivity : AppCompatActivity() {
         getSharedPreferences("shadowrec_prefs", Context.MODE_PRIVATE)
     }
 
+    // prefs de conversaciones (para “NUEVO”)
+    private val convoPrefs by lazy {
+        getSharedPreferences("shadowrec_conversations", Context.MODE_PRIVATE)
+    }
+
     // Acción a ejecutar cuando el usuario enciende la ubicación desde el diálogo
     private var onLocationEnabledAction: (() -> Unit)? = null
 
@@ -111,12 +116,16 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // ✅ Sólo abrimos AuthActivity si hace falta (no logueado o perfil incompleto)
+        // ✅ Chequeo de sesión al entrar a la app
         val profileComplete = prefs.getBoolean("user_profile_complete", false)
         val currentUser = FirebaseAuth.getInstance().currentUser
         if (!profileComplete || currentUser == null) {
-            val authIntent = Intent(this, AuthActivity::class.java)
+            val authIntent = Intent(this, AuthActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            }
             startActivity(authIntent)
+            finish()
+            return
         }
 
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
@@ -124,16 +133,38 @@ class MainActivity : AppCompatActivity() {
         val buttonCamera = findViewById<Button>(R.id.buttonCamera)
         val buttonUbi = findViewById<Button>(R.id.buttonUbi)
         val buttonChats = findViewById<Button>(R.id.buttonChats)
+        val buttonLogout = findViewById<Button>(R.id.buttonLogout)
 
         buttonChats.setOnClickListener {
             val i = Intent(this, UsersActivity::class.java)
             startActivity(i)
         }
 
+        // ✅ Cerrar sesión
+        buttonLogout.setOnClickListener {
+            // 1) detener tracking si estaba activo
+            if (isTracking) {
+                stopLocationTrackingService()
+            }
+
+            // 2) cerrar sesión de Firebase
+            FirebaseAuth.getInstance().signOut()
+
+            // 3) limpiar preferencias locales
+            prefs.edit().clear().apply()
+            convoPrefs.edit().clear().apply()
+
+            // 4) ir a AuthActivity y limpiar backstack
+            val intent = Intent(this, AuthActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            }
+            startActivity(intent)
+            finish()
+        }
+
         // Recuperar estado previo del tracking
         isTracking = prefs.getBoolean("tracking_active", false)
         updateUbiButtonText()
-
 
         // ====== CÁMARA / QR ======
         buttonCamera.setOnClickListener {

@@ -39,7 +39,7 @@
         app:layout_constraintHorizontal_bias="0.5"
         android:layout_marginBottom="16dp" />
 
-    <!-- NUEVO: botón para chats / usuarios -->
+    <!-- Botón para chats -->
     <Button
         android:id="@+id/buttonChats"
         android:layout_width="0dp"
@@ -58,8 +58,19 @@
         android:text="Configurar ubicación"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintBottom_toTopOf="@+id/buttonLogout"
         android:layout_marginBottom="16dp"
+        app:layout_constraintHorizontal_bias="0.5" />
+
+    <!-- NUEVO: botón Cerrar sesión -->
+    <Button
+        android:id="@+id/buttonLogout"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="Cerrar sesión"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintHorizontal_bias="0.5" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

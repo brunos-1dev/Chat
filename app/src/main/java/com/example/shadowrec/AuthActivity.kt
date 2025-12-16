@@ -1,6 +1,7 @@
 package com.example.shadowrec
 
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Button
@@ -93,8 +94,6 @@ class AuthActivity : AppCompatActivity() {
                         displayName = fullName
                     }
                     user.updateProfile(profileUpdates)
-                    // Si quisieras, podrías encadenar addOnSuccessListener / addOnFailureListener aquí,
-                    // pero para nuestro caso no es crítico esperar ese resultado.
                 }
 
                 // 2) Documento users/{deviceId} en Firestore (SIN contraseña)
@@ -125,7 +124,9 @@ class AuthActivity : AppCompatActivity() {
                             "Usuario registrado correctamente",
                             Toast.LENGTH_SHORT
                         ).show()
-                        finish() // volver a MainActivity
+
+                        // 👉 Ir a MainActivity después de registrar
+                        goToMainAndFinish()
                     }
                     .addOnFailureListener { e ->
                         Toast.makeText(
@@ -178,7 +179,9 @@ class AuthActivity : AppCompatActivity() {
                             .apply()
 
                         Toast.makeText(this, "Sesión iniciada", Toast.LENGTH_SHORT).show()
-                        finish()
+
+                        // 👉 Ir a MainActivity después de iniciar sesión
+                        goToMainAndFinish()
                     }
                     .addOnFailureListener {
                         // Si falla la lectura pero login fue OK, igual marcamos como logueado
@@ -190,7 +193,9 @@ class AuthActivity : AppCompatActivity() {
                             "Sesión iniciada (sin cargar perfil)",
                             Toast.LENGTH_SHORT
                         ).show()
-                        finish()
+
+                        // 👉 También redirigimos a MainActivity aquí
+                        goToMainAndFinish()
                     }
             }
             .addOnFailureListener { e ->
@@ -200,5 +205,16 @@ class AuthActivity : AppCompatActivity() {
                     Toast.LENGTH_LONG
                 ).show()
             }
+    }
+
+    // ---------- NAVEGAR A MAIN Y CERRAR AUTH ----------
+
+    private fun goToMainAndFinish() {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            // limpiamos la pila para que Auth no quede atrás
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        startActivity(intent)
+        finish()
     }
 }
