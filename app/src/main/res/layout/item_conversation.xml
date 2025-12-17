@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="72dp"
+    android:background="@drawable/bg_chat_row">
+
+    <!-- Avatar con iniciales -->
+    <TextView
+        android:id="@+id/txtAvatar"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:gravity="center"
+        android:text="SR"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:textColor="@android:color/white"
+        android:fontFamily="sans-serif-medium"
+        android:background="@drawable/bg_chat_avatar"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        android:layout_marginStart="8dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="8dp"/>
+
+    <!-- Nombre del chat -->
+    <TextView
+        android:id="@+id/txtTitle"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="Nombre del chat"
+        android:textColor="@android:color/white"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:maxLines="1"
+        android:ellipsize="end"
+        app:layout_constraintStart_toEndOf="@id/txtAvatar"
+        app:layout_constraintTop_toTopOf="@id/txtAvatar"
+        app:layout_constraintEnd_toStartOf="@id/txtTime"
+        android:layout_marginStart="12dp"/>
+
+    <!-- Hora último mensaje -->
+    <TextView
+        android:id="@+id/txtTime"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="14:35"
+        android:textColor="#B0B3C0"
+        android:textSize="12sp"
+        app:layout_constraintTop_toTopOf="@id/txtTitle"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginEnd="8dp"/>
+
+    <!-- Último mensaje -->
+    <TextView
+        android:id="@+id/txtLastMessage"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="Último mensaje…"
+        android:textColor="#B0B3C0"
+        android:textSize="14sp"
+        android:maxLines="1"
+        android:ellipsize="end"
+        app:layout_constraintStart_toStartOf="@id/txtTitle"
+        app:layout_constraintTop_toBottomOf="@id/txtTitle"
+        app:layout_constraintEnd_toStartOf="@id/badgeUnread"
+        android:layout_marginTop="4dp"/>
+
+    <!-- Badge de no leído -->
+    <TextView
+        android:id="@+id/badgeUnread"
+        android:layout_width="20dp"
+        android:layout_height="20dp"
+        android:gravity="center"
+        android:text=""
+        android:textSize="12sp"
+        android:textColor="@android:color/white"
+        android:background="@drawable/bg_chat_unread_badge"
+        android:visibility="gone"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintBottom_toBottomOf="@id/txtLastMessage"
+        android:layout_marginEnd="12dp"/>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

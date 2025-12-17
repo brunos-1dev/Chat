@@ -28,6 +28,7 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private lateinit var txtChatTitle: TextView
+    private lateinit var txtChatAvatar: TextView
     private lateinit var listMessages: ListView
     private lateinit var edtMessage: EditText
     private lateinit var btnSend: Button
@@ -75,6 +76,7 @@ class ChatActivity : AppCompatActivity() {
         setContentView(R.layout.activity_chat)
 
         txtChatTitle = findViewById(R.id.txtChatTitle)
+        txtChatAvatar = findViewById(R.id.txtChatAvatar)
         listMessages = findViewById(R.id.listMessages)
         edtMessage = findViewById(R.id.edtMessage)
         btnSend = findViewById(R.id.btnSend)
@@ -97,6 +99,7 @@ class ChatActivity : AppCompatActivity() {
 
         if (!initialTitle.isNullOrBlank()) {
             txtChatTitle.text = initialTitle
+            updateAvatarFromTitle(initialTitle)
         }
 
         // Compat: si no viene conversationId pero sí email (flujo viejo)
@@ -151,6 +154,7 @@ class ChatActivity : AppCompatActivity() {
                 val name = data["name"] as? String
                 if (isGroup && !name.isNullOrBlank()) {
                     txtChatTitle.text = name
+                    updateAvatarFromTitle(name)
                 }
 
                 @Suppress("UNCHECKED_CAST")
@@ -267,7 +271,6 @@ class ChatActivity : AppCompatActivity() {
         }
     }
 
-
     private fun refreshMessagesLabels() {
         // Re-generamos los textos usando buildLabelForMessage
         val convId = conversationId ?: return
@@ -359,7 +362,8 @@ class ChatActivity : AppCompatActivity() {
 
         val summary = hashMapOf(
             "lastMessage" to text,
-            "lastTimestamp" to FieldValue.serverTimestamp()
+            "lastTimestamp" to FieldValue.serverTimestamp(),
+            "lastFromUid" to from
         )
 
         db.collection("conversations")
@@ -445,6 +449,26 @@ class ChatActivity : AppCompatActivity() {
     }
 
     // -------------------------------------------------------------
+    //   Avatar helpers
+    // -------------------------------------------------------------
+    private fun updateAvatarFromTitle(title: String) {
+        val initials = buildInitials(title)
+        txtChatAvatar.text = initials
+    }
+
+    private fun buildInitials(name: String): String {
+        val parts = name.trim().split(" ")
+            .filter { it.isNotBlank() }
+        if (parts.isEmpty()) return "?"
+
+        return if (parts.size == 1) {
+            parts[0].take(2).uppercase()
+        } else {
+            (parts[0].take(1) + parts[1].take(1)).uppercase()
+        }
+    }
+
+    // -------------------------------------------------------------
     //   Adapter de mensajes con burbujas
     // -------------------------------------------------------------
     private inner class ChatMessagesAdapter(
@@ -508,3 +532,4 @@ class ChatActivity : AppCompatActivity() {
         }
     }
 }
+

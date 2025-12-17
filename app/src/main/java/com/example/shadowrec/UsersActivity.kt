@@ -1,26 +1,27 @@
 package com.example.shadowrec
 
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.view.LayoutInflater
 import android.view.View
+import android.view.ViewGroup
 import android.widget.*
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
-import androidx.appcompat.app.AlertDialog
-
-
-
 
 class UsersActivity : AppCompatActivity() {
 
     private lateinit var listUsers: ListView          // ahora lista de CHATS
     private lateinit var progressUsers: ProgressBar
     private lateinit var btnNewChat: Button
-    private lateinit var adapter: ArrayAdapter<String>
+    private lateinit var adapter: ChatListAdapter
 
     private val db by lazy { Firebase.firestore }
     private val auth by lazy { FirebaseAuth.getInstance() }
@@ -35,6 +36,9 @@ class UsersActivity : AppCompatActivity() {
 
     private var currentUid: String? = null
     private var currentEmail: String? = null
+
+    // Listener en vivo de conversaciones
+    private var conversationsListener: ListenerRegistration? = null
 
     // Mapa email -> nombre completo (se carga una sola vez)
     private val userNameByEmail = mutableMapOf<String, String>()
@@ -59,11 +63,7 @@ class UsersActivity : AppCompatActivity() {
         progressUsers = findViewById(R.id.progressUsers)
         btnNewChat = findViewById(R.id.btnNewChat)
 
-        adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_list_item_1,
-            mutableListOf<String>()
-        )
+        adapter = ChatListAdapter(this, conversations)
         listUsers.adapter = adapter
 
         val user = auth.currentUser
@@ -127,6 +127,15 @@ class UsersActivity : AppCompatActivity() {
         loadConversations()
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        // Liberamos el listener para no dejarlo colgado
+        conversationsListener?.remove()
+    }
+
+    // --------------------------------------------------------------------
+    // Carga de conversaciones
+    // --------------------------------------------------------------------
     private fun loadConversations() {
         val uid = currentUid ?: run {
             Toast.makeText(this, "No hay usuario logueado", Toast.LENGTH_SHORT).show()
@@ -135,6 +144,7 @@ class UsersActivity : AppCompatActivity() {
 
         progressUsers.visibility = View.VISIBLE
         conversations.clear()
+        adapter.notifyDataSetChanged()
 
         // 1) Traemos TODOS los usuarios una vez para armar mapa email -> nombre
         db.collection("users")
@@ -148,20 +158,37 @@ class UsersActivity : AppCompatActivity() {
                     val name = (first + " " + last).trim().ifEmpty { email }
                     userNameByEmail[email] = name
                 }
-                // 2) Ahora sí, traemos las conversaciones del usuario
-                loadConversationsForUser(uid)
+                // 2) Ahora sí, enganchamos listener en vivo de conversaciones
+                attachConversationsListener(uid)
             }
             .addOnFailureListener {
-                // Si falla, igual intentamos cargar las conversaciones (usando email como título)
-                loadConversationsForUser(uid)
+                // Si falla, igual enganchamos el listener (usando email como título)
+                attachConversationsListener(uid)
             }
     }
 
-    private fun loadConversationsForUser(uid: String) {
-        db.collection("conversations")
+    private fun attachConversationsListener(uid: String) {
+        // Si ya había un listener, lo removemos
+        conversationsListener?.remove()
+
+        conversationsListener = db.collection("conversations")
             .whereArrayContains("participants", uid)
-            .get()
-            .addOnSuccessListener { qs ->
+            .addSnapshotListener { qs, error ->
+                if (error != null) {
+                    Toast.makeText(
+                        this,
+                        "Error cargando chats: ${error.localizedMessage}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    progressUsers.visibility = View.GONE
+                    return@addSnapshotListener
+                }
+
+                if (qs == null) {
+                    progressUsers.visibility = View.GONE
+                    return@addSnapshotListener
+                }
+
                 conversations.clear()
 
                 for (doc in qs.documents) {
@@ -174,9 +201,7 @@ class UsersActivity : AppCompatActivity() {
                     val hiddenFor =
                         (doc.get("hiddenFor") as? List<*>)?.mapNotNull { it as? String }
                             ?: emptyList()
-                    if (hiddenFor.contains(uid)) {
-                        continue
-                    }
+                    if (hiddenFor.contains(uid)) continue
 
                     val lastMessage = doc.getString("lastMessage") ?: "(sin mensajes)"
                     val lastTs = doc.getTimestamp("lastTimestamp")
@@ -187,7 +212,6 @@ class UsersActivity : AppCompatActivity() {
                     val localKey = "last_read_$id"
                     val localReadMillis = convoPrefs.getLong(localKey, 0L)
 
-                    // Lo mismo que tenías antes: ¿hay algo más nuevo que lo último que leí localmente?
                     val baseHasUnread =
                         lastTs != null && lastServerMillis > localReadMillis
 
@@ -245,21 +269,13 @@ class UsersActivity : AppCompatActivity() {
                 }
 
                 refreshLabels()
-            }
-            .addOnFailureListener { e ->
-                Toast.makeText(
-                    this,
-                    "Error cargando chats: ${e.localizedMessage}",
-                    Toast.LENGTH_LONG
-                ).show()
-                refreshLabels()
-            }
-            .addOnCompleteListener {
                 progressUsers.visibility = View.GONE
             }
     }
 
-
+    // --------------------------------------------------------------------
+    // Leído / eliminar
+    // --------------------------------------------------------------------
     private fun markConversationLocallyRead(conv: ConversationItem) {
         val millis = conv.lastTimestamp?.toDate()?.time ?: System.currentTimeMillis()
         val key = "last_read_${conv.id}"
@@ -295,14 +311,66 @@ class UsersActivity : AppCompatActivity() {
             }
     }
 
+    // --------------------------------------------------------------------
+    // Refresco de la lista
+    // --------------------------------------------------------------------
     private fun refreshLabels() {
-        val labels = conversations.map { conv ->
-            val unreadSuffix = if (conv.hasUnread) "\n🔴 NUEVO" else ""
-            "${conv.title}\n${conv.lastMessage}$unreadSuffix"
-        }
-
-        adapter.clear()
-        adapter.addAll(labels)
         adapter.notifyDataSetChanged()
     }
+
+    // --------------------------------------------------------------------
+    // Adapter custom para la lista de chats (estilo WhatsApp)
+    // --------------------------------------------------------------------
+    inner class ChatListAdapter(
+        context: Context,
+        private val items: List<ConversationItem>
+    ) : ArrayAdapter<ConversationItem>(context, 0, items) {
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val rowView = convertView ?: LayoutInflater.from(context)
+                .inflate(R.layout.item_conversation, parent, false)
+
+            val txtAvatarInitials = rowView.findViewById<TextView>(R.id.txtAvatar)
+            val txtTitle = rowView.findViewById<TextView>(R.id.txtTitle)
+            val txtLastMessage = rowView.findViewById<TextView>(R.id.txtLastMessage)
+            val txtTime = rowView.findViewById<TextView>(R.id.txtTime)
+            val badgeUnread = rowView.findViewById<TextView>(R.id.badgeUnread)
+
+            val item = items[position]
+
+            // Iniciales (avatar tipo círculo con letras)
+            txtAvatarInitials.text = buildInitials(item.title)
+
+            // Título y último mensaje
+            txtTitle.text = item.title
+            txtLastMessage.text = item.lastMessage
+
+            // Hora (HH:mm)
+            val tsDate = item.lastTimestamp?.toDate()
+            txtTime.text = if (tsDate != null) {
+                android.text.format.DateFormat.format("HH:mm", tsDate)
+            } else {
+                ""
+            }
+
+            // Badge de "NUEVO"
+            badgeUnread.visibility = if (item.hasUnread) View.VISIBLE else View.GONE
+
+            return rowView
+        }
+
+        private fun buildInitials(name: String): String {
+            val parts = name.trim().split(" ")
+                .filter { it.isNotBlank() }
+            if (parts.isEmpty()) return "?"
+
+            return if (parts.size == 1) {
+                parts[0].take(2).uppercase()
+            } else {
+                (parts[0].take(1) + parts[1].take(1)).uppercase()
+            }
+        }
+    }
 }
+
+

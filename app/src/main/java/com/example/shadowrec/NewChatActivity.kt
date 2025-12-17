@@ -109,6 +109,7 @@ class NewChatActivity : AppCompatActivity() {
         val meUid = currentUid ?: return
         val meEmail = currentEmail
 
+        // Qué usuarios tildó el usuario en la lista
         val checked = listUsers.checkedItemPositions
         val selectedUsers = mutableListOf<UserItem>()
 
@@ -123,37 +124,50 @@ class NewChatActivity : AppCompatActivity() {
             return
         }
 
-        val allUids = mutableListOf<String>()
-        val allEmails = mutableListOf<String>()
-
-        allUids.add(meUid)
-        meEmail?.let { allEmails.add(it) }
-
-        for (u in selectedUsers) {
-            allUids.add(u.uid)
-            if (u.email.isNotBlank()) allEmails.add(u.email)
+        // UIDs y emails de TODOS los participantes (yo + seleccionados)
+        val allUids = mutableListOf<String>().apply {
+            add(meUid)
+            addAll(selectedUsers.map { it.uid })
         }
 
-        val isGroup = allUids.size > 2
-        val groupName = edtGroupName.text.toString().trim()
+        val allEmails = mutableListOf<String>().apply {
+            meEmail?.let { add(it) }
+            addAll(selectedUsers.mapNotNull { u ->
+                u.email.takeIf { it.isNotBlank() }
+            })
+        }
 
+        val isGroup = selectedUsers.size > 1
+        val groupName = edtGroupName.text.toString().trim()
         val type = if (isGroup) "group" else "direct"
+
         val titleForIntent: String = if (isGroup) {
             if (groupName.isNotEmpty()) groupName
             else "Grupo sin nombre"
         } else {
-            // Directo: nombre del otro
-            selectedUsers.first().name
+            val other = selectedUsers.first()
+            other.name.ifBlank { other.email }
         }
 
-        val convDoc = db.collection("conversations").document()
+        // === CLAVE: ID de la conversación ===
+        // - Directo (1 persona): usamos un ID determinístico por pareja de UIDs
+        //   → si ya existía, lo reusa; si no, crea uno nuevo con ese mismo ID.
+        // - Grupo: dejamos que Firestore genere un ID aleatorio.
+        val convDoc = if (!isGroup) {
+            val otherUid = selectedUsers.first().uid
+            val convId = conversationIdFor(meUid, otherUid)
+            db.collection("conversations").document(convId)
+        } else {
+            db.collection("conversations").document()
+        }
 
-        val data = hashMapOf(
+        val data = hashMapOf<String, Any?>(
             "type" to type,
             "participants" to allUids,
             "participantEmails" to allEmails,
             "lastMessage" to "",
-            "lastTimestamp" to FieldValue.serverTimestamp()
+            "lastTimestamp" to FieldValue.serverTimestamp(),
+            "hiddenFor" to emptyList<String>()    // por si usás ocultar chat
         )
 
         if (isGroup && groupName.isNotEmpty()) {
@@ -179,5 +193,14 @@ class NewChatActivity : AppCompatActivity() {
                     Toast.LENGTH_LONG
                 ).show()
             }
+    }
+
+    // Un solo ID de conversación para la misma pareja de usuarios
+    private fun conversationIdFor(uid1: String, uid2: String): String {
+        return if (uid1 < uid2) {
+            "${uid1}_${uid2}"
+        } else {
+            "${uid2}_${uid1}"
+        }
     }
 }

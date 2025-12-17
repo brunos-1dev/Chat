@@ -2,4 +2,11 @@
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <color name="sr_primary">#C8A5FF</color>
+    <color name="sr_secondary">#141A22</color>
+    <color name="sr_primary_soft">#E6D7FF</color>
+    <color name="sr_background">#050A18</color>
+    <color name="sr_card">#2B2F3F</color>
+    <color name="sr_text_primary">#FFFFFF</color>
+    <color name="sr_text_secondary">#D0CFE6</color>
 </resources>
