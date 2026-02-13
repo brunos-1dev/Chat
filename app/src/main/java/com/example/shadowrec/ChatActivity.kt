@@ -1,7 +1,7 @@
 package com.example.shadowrec
 
-import android.content.ClipboardManager
 import android.content.ClipData
+import android.content.ClipboardManager
 import android.os.Bundle
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -34,6 +34,7 @@ class ChatActivity : AppCompatActivity() {
     private lateinit var listMessages: ListView
     private lateinit var edtMessage: EditText
     private lateinit var btnSend: Button
+    private lateinit var btnScrollToBottom: ImageButton
 
     // Ahora usamos una lista de filas ricas (mensaje + hora + quién)
     private val messages = mutableListOf<ChatMessageRow>()
@@ -69,7 +70,7 @@ class ChatActivity : AppCompatActivity() {
     // Datos para cada fila del ListView
     data class ChatMessageRow(
         val fromUid: String,
-        val labelText: String,     // "Yo: hola" o "Mariano: hola"
+        val labelText: String,     // "Mariano: hola" o solo "hola"
         val createdAt: Timestamp?  // para mostrar hora/fecha
     )
 
@@ -82,9 +83,54 @@ class ChatActivity : AppCompatActivity() {
         listMessages = findViewById(R.id.listMessages)
         edtMessage = findViewById(R.id.edtMessage)
         btnSend = findViewById(R.id.btnSend)
+        btnScrollToBottom = findViewById(R.id.btnScrollToBottom)
 
         adapter = ChatMessagesAdapter(messages)
         listMessages.adapter = adapter
+
+        // Long-press para copiar texto del mensaje
+        listMessages.setOnItemLongClickListener { _, _, position, _ ->
+            val row = messages.getOrNull(position)
+            val textToCopy = row?.labelText?.trim().orEmpty()
+            if (textToCopy.isNotEmpty()) {
+                val clipboard =
+                    getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+                val clip = ClipData.newPlainText("Mensaje", textToCopy)
+                clipboard.setPrimaryClip(clip)
+                Toast.makeText(this, "Mensaje copiado", Toast.LENGTH_SHORT).show()
+            }
+            true
+        }
+
+        // Botón para bajar al último mensaje
+        btnScrollToBottom.setOnClickListener {
+            if (messages.isNotEmpty()) {
+                listMessages.setSelection(messages.size - 1)
+            }
+        }
+
+        // Mostrar/ocultar el botón según el scroll
+        listMessages.setOnScrollListener(object : AbsListView.OnScrollListener {
+            override fun onScrollStateChanged(view: AbsListView?, scrollState: Int) {
+                // nada
+            }
+
+            override fun onScroll(
+                view: AbsListView?,
+                firstVisibleItem: Int,
+                visibleItemCount: Int,
+                totalItemCount: Int
+            ) {
+                if (totalItemCount == 0) {
+                    btnScrollToBottom.visibility = View.GONE
+                    return
+                }
+                val lastVisible = firstVisibleItem + visibleItemCount
+                val atBottom = lastVisible >= totalItemCount
+                btnScrollToBottom.visibility =
+                    if (atBottom) View.GONE else View.VISIBLE
+            }
+        })
 
         val user = auth.currentUser
         if (user == null) {
@@ -274,7 +320,6 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun refreshMessagesLabels() {
-        // Re-generamos los textos usando buildLabelForMessage
         val convId = conversationId ?: return
 
         db.collection("conversations")
@@ -379,7 +424,6 @@ class ChatActivity : AppCompatActivity() {
     private fun createOrResolveDirectConversationForEmail(email: String) {
         val meUid = currentUid ?: return
 
-        // Buscamos usuario por email
         db.collection("users")
             .whereEqualTo("email", email)
             .limit(1)
@@ -402,7 +446,6 @@ class ChatActivity : AppCompatActivity() {
                 conversationId = convId
                 isGroup = false
 
-                // Aseguramos que exista el doc de conversación
                 val myEmail = currentEmail
                 val otherEmail = email
 
@@ -503,7 +546,7 @@ class ChatActivity : AppCompatActivity() {
             val bgRes = if (isMine) R.drawable.bg_message_me else R.drawable.bg_message_other
             bubble.background = ContextCompat.getDrawable(this@ChatActivity, bgRes)
 
-            // Texto del mensaje (incluye "Yo: " o nombre si aplica)
+            // Texto del mensaje (sin "Yo", con nombre solo en grupos para otros usuarios)
             txtBody.text = item.labelText
 
             // Hora (y fecha si no es hoy)
@@ -530,18 +573,7 @@ class ChatActivity : AppCompatActivity() {
                 txtTime.visibility = View.GONE
             }
 
-            // Long press para copiar texto del mensaje
-            view.setOnLongClickListener {
-                val clipboard =
-                    getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-                val clip = ClipData.newPlainText("mensaje", item.labelText)
-                clipboard.setPrimaryClip(clip)
-                Toast.makeText(this@ChatActivity, "Mensaje copiado", Toast.LENGTH_SHORT).show()
-                true
-            }
-
             return view
         }
     }
 }
-

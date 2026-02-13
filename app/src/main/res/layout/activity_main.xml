@@ -21,7 +21,6 @@
         app:layout_constraintEnd_toEndOf="parent"
         android:layout_marginTop="52dp" />
 
-
     <!-- Card con las acciones principales -->
     <androidx.cardview.widget.CardView
         android:id="@+id/cardMainActions"
@@ -42,8 +41,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="20dp">
-
+            android:padding="20dp"
+            android:background="@color/sr_background">
 
             <!-- Botón cámara / QR -->
             <Button
@@ -94,5 +93,4 @@
 
         </LinearLayout>
     </androidx.cardview.widget.CardView>
-
 </androidx.constraintlayout.widget.ConstraintLayout>
