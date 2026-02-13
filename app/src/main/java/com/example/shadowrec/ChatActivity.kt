@@ -2,6 +2,7 @@ package com.example.shadowrec
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Context
 import android.os.Bundle
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -10,6 +11,7 @@ import android.view.ViewGroup
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.appcompat.app.AlertDialog
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
@@ -34,7 +36,6 @@ class ChatActivity : AppCompatActivity() {
     private lateinit var listMessages: ListView
     private lateinit var edtMessage: EditText
     private lateinit var btnSend: Button
-    private lateinit var btnScrollToBottom: ImageButton
 
     // Ahora usamos una lista de filas ricas (mensaje + hora + quién)
     private val messages = mutableListOf<ChatMessageRow>()
@@ -70,7 +71,7 @@ class ChatActivity : AppCompatActivity() {
     // Datos para cada fila del ListView
     data class ChatMessageRow(
         val fromUid: String,
-        val labelText: String,     // "Mariano: hola" o solo "hola"
+        val labelText: String,     // texto que se muestra en la burbuja
         val createdAt: Timestamp?  // para mostrar hora/fecha
     )
 
@@ -83,54 +84,9 @@ class ChatActivity : AppCompatActivity() {
         listMessages = findViewById(R.id.listMessages)
         edtMessage = findViewById(R.id.edtMessage)
         btnSend = findViewById(R.id.btnSend)
-        btnScrollToBottom = findViewById(R.id.btnScrollToBottom)
 
         adapter = ChatMessagesAdapter(messages)
         listMessages.adapter = adapter
-
-        // Long-press para copiar texto del mensaje
-        listMessages.setOnItemLongClickListener { _, _, position, _ ->
-            val row = messages.getOrNull(position)
-            val textToCopy = row?.labelText?.trim().orEmpty()
-            if (textToCopy.isNotEmpty()) {
-                val clipboard =
-                    getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-                val clip = ClipData.newPlainText("Mensaje", textToCopy)
-                clipboard.setPrimaryClip(clip)
-                Toast.makeText(this, "Mensaje copiado", Toast.LENGTH_SHORT).show()
-            }
-            true
-        }
-
-        // Botón para bajar al último mensaje
-        btnScrollToBottom.setOnClickListener {
-            if (messages.isNotEmpty()) {
-                listMessages.setSelection(messages.size - 1)
-            }
-        }
-
-        // Mostrar/ocultar el botón según el scroll
-        listMessages.setOnScrollListener(object : AbsListView.OnScrollListener {
-            override fun onScrollStateChanged(view: AbsListView?, scrollState: Int) {
-                // nada
-            }
-
-            override fun onScroll(
-                view: AbsListView?,
-                firstVisibleItem: Int,
-                visibleItemCount: Int,
-                totalItemCount: Int
-            ) {
-                if (totalItemCount == 0) {
-                    btnScrollToBottom.visibility = View.GONE
-                    return
-                }
-                val lastVisible = firstVisibleItem + visibleItemCount
-                val atBottom = lastVisible >= totalItemCount
-                btnScrollToBottom.visibility =
-                    if (atBottom) View.GONE else View.VISIBLE
-            }
-        })
 
         val user = auth.currentUser
         if (user == null) {
@@ -320,6 +276,7 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun refreshMessagesLabels() {
+        // Re-generamos los textos usando buildLabelForMessage
         val convId = conversationId ?: return
 
         db.collection("conversations")
@@ -424,6 +381,7 @@ class ChatActivity : AppCompatActivity() {
     private fun createOrResolveDirectConversationForEmail(email: String) {
         val meUid = currentUid ?: return
 
+        // Buscamos usuario por email
         db.collection("users")
             .whereEqualTo("email", email)
             .limit(1)
@@ -446,6 +404,7 @@ class ChatActivity : AppCompatActivity() {
                 conversationId = convId
                 isGroup = false
 
+                // Aseguramos que exista el doc de conversación
                 val myEmail = currentEmail
                 val otherEmail = email
 
@@ -514,6 +473,50 @@ class ChatActivity : AppCompatActivity() {
     }
 
     // -------------------------------------------------------------
+    //   Helpers para menú contextual de mensajes
+    // -------------------------------------------------------------
+    private fun showMessageOptionsDialog(item: ChatMessageRow) {
+        val options = arrayOf("Copiar mensaje", "Ver fecha y hora")
+
+        AlertDialog.Builder(this)
+            .setTitle("Mensaje")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> copyMessageToClipboard(item.labelText)
+                    1 -> showMessageInfo(item)
+                }
+            }
+            .show()
+    }
+
+    private fun copyMessageToClipboard(text: String) {
+        val clipboard =
+            getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = ClipData.newPlainText("Mensaje", text)
+        clipboard.setPrimaryClip(clip)
+        Toast.makeText(this, "Mensaje copiado", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showMessageInfo(item: ChatMessageRow) {
+        val ts = item.createdAt
+        val msgInfo = if (ts != null) {
+            val date = ts.toDate()
+            val dateStr = android.text.format.DateFormat
+                .format("dd/MM/yyyy HH:mm:ss", date)
+                .toString()
+            "Enviado el: $dateStr"
+        } else {
+            "Este mensaje aún no tiene marca de tiempo disponible."
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Información del mensaje")
+            .setMessage(msgInfo)
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
+    // -------------------------------------------------------------
     //   Adapter de mensajes con burbujas
     // -------------------------------------------------------------
     private inner class ChatMessagesAdapter(
@@ -546,7 +549,7 @@ class ChatActivity : AppCompatActivity() {
             val bgRes = if (isMine) R.drawable.bg_message_me else R.drawable.bg_message_other
             bubble.background = ContextCompat.getDrawable(this@ChatActivity, bgRes)
 
-            // Texto del mensaje (sin "Yo", con nombre solo en grupos para otros usuarios)
+            // Texto del mensaje (incluye nombre si aplica)
             txtBody.text = item.labelText
 
             // Hora (y fecha si no es hoy)
@@ -571,6 +574,12 @@ class ChatActivity : AppCompatActivity() {
             } else {
                 txtTime.text = ""
                 txtTime.visibility = View.GONE
+            }
+
+            // Long press sobre la burbuja -> menú contextual
+            bubble.setOnLongClickListener {
+                showMessageOptionsDialog(item)
+                true
             }
 
             return view
