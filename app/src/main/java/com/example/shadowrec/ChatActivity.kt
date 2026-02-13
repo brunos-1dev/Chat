@@ -1,5 +1,7 @@
 package com.example.shadowrec
 
+import android.content.ClipboardManager
+import android.content.ClipData
 import android.os.Bundle
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -526,6 +528,16 @@ class ChatActivity : AppCompatActivity() {
             } else {
                 txtTime.text = ""
                 txtTime.visibility = View.GONE
+            }
+
+            // Long press para copiar texto del mensaje
+            view.setOnLongClickListener {
+                val clipboard =
+                    getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+                val clip = ClipData.newPlainText("mensaje", item.labelText)
+                clipboard.setPrimaryClip(clip)
+                Toast.makeText(this@ChatActivity, "Mensaje copiado", Toast.LENGTH_SHORT).show()
+                true
             }
 
             return view
