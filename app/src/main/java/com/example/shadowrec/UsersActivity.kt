@@ -1,6 +1,5 @@
 package com.example.shadowrec
 
-import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.view.LayoutInflater
@@ -12,16 +11,15 @@ import androidx.appcompat.app.AppCompatActivity
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
-import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
+import java.util.Calendar
 
 class UsersActivity : AppCompatActivity() {
 
     private lateinit var listUsers: ListView          // ahora lista de CHATS
     private lateinit var progressUsers: ProgressBar
     private lateinit var btnNewChat: Button
-    private lateinit var adapter: ChatListAdapter
 
     private val db by lazy { Firebase.firestore }
     private val auth by lazy { FirebaseAuth.getInstance() }
@@ -29,16 +27,13 @@ class UsersActivity : AppCompatActivity() {
         getSharedPreferences("shadowrec_prefs", MODE_PRIVATE)
     }
 
-    // prefs locales solo para “NUEVO” por dispositivo
+    // NUEVO: mismas prefs que usa ChatActivity para "NUEVO"
     private val convoPrefs by lazy {
         getSharedPreferences("shadowrec_conversations", MODE_PRIVATE)
     }
 
     private var currentUid: String? = null
     private var currentEmail: String? = null
-
-    // Listener en vivo de conversaciones
-    private var conversationsListener: ListenerRegistration? = null
 
     // Mapa email -> nombre completo (se carga una sola vez)
     private val userNameByEmail = mutableMapOf<String, String>()
@@ -47,13 +42,14 @@ class UsersActivity : AppCompatActivity() {
         val id: String,
         val type: String,             // "direct" o "group"
         var title: String,            // nombre grupo o persona
-        var lastMessage: String,
-        var hasUnread: Boolean,
+        val lastMessage: String,
+        val hasUnread: Boolean,
         val participantEmails: List<String>,
-        var lastTimestamp: Timestamp? // para manejar leído local
+        val lastTimestamp: Timestamp?
     )
 
     private val conversations = mutableListOf<ConversationItem>()
+    private lateinit var adapter: ConversationsAdapter
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,7 +59,7 @@ class UsersActivity : AppCompatActivity() {
         progressUsers = findViewById(R.id.progressUsers)
         btnNewChat = findViewById(R.id.btnNewChat)
 
-        adapter = ChatListAdapter(this, conversations)
+        adapter = ConversationsAdapter(conversations)
         listUsers.adapter = adapter
 
         val user = auth.currentUser
@@ -75,15 +71,9 @@ class UsersActivity : AppCompatActivity() {
         currentUid = user.uid
         currentEmail = prefs.getString("user_email", user.email) ?: user.email
 
-        // Tap corto -> abrir chat y marcar leído local
+        // Tap sobre un chat -> abrir ChatActivity
         listUsers.setOnItemClickListener { _, _, position, _ ->
             val conv = conversations.getOrNull(position) ?: return@setOnItemClickListener
-
-            if (conv.hasUnread) {
-                conv.hasUnread = false
-                markConversationLocallyRead(conv)
-                refreshLabels()
-            }
 
             val i = Intent(this, ChatActivity::class.java).apply {
                 putExtra(ChatActivity.EXTRA_CONVERSATION_ID, conv.id)
@@ -93,18 +83,18 @@ class UsersActivity : AppCompatActivity() {
             startActivity(i)
         }
 
-        // Tap largo -> eliminar (ocultar) chat para este usuario
+        // Long press -> ocultar chat para este usuario
         listUsers.setOnItemLongClickListener { _, _, position, _ ->
             val conv = conversations.getOrNull(position) ?: return@setOnItemLongClickListener true
 
             AlertDialog.Builder(this)
                 .setTitle("Eliminar chat")
                 .setMessage(
-                    "¿Querés eliminar este chat de tu lista?\n\n" +
-                            "No se borrará para los demás participantes."
+                    "¿Querés ocultar el chat \"${conv.title}\"?\n" +
+                            "Solo se ocultará para vos, los mensajes siguen existiendo en la nube."
                 )
-                .setPositiveButton("Eliminar") { _, _ ->
-                    deleteConversationForUser(conv)
+                .setPositiveButton("Ocultar") { _, _ ->
+                    removeConversationForCurrentUser(conv.id)
                 }
                 .setNegativeButton("Cancelar", null)
                 .show()
@@ -127,15 +117,6 @@ class UsersActivity : AppCompatActivity() {
         loadConversations()
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        // Liberamos el listener para no dejarlo colgado
-        conversationsListener?.remove()
-    }
-
-    // --------------------------------------------------------------------
-    // Carga de conversaciones
-    // --------------------------------------------------------------------
     private fun loadConversations() {
         val uid = currentUid ?: run {
             Toast.makeText(this, "No hay usuario logueado", Toast.LENGTH_SHORT).show()
@@ -144,7 +125,6 @@ class UsersActivity : AppCompatActivity() {
 
         progressUsers.visibility = View.VISIBLE
         conversations.clear()
-        adapter.notifyDataSetChanged()
 
         // 1) Traemos TODOS los usuarios una vez para armar mapa email -> nombre
         db.collection("users")
@@ -158,37 +138,20 @@ class UsersActivity : AppCompatActivity() {
                     val name = (first + " " + last).trim().ifEmpty { email }
                     userNameByEmail[email] = name
                 }
-                // 2) Ahora sí, enganchamos listener en vivo de conversaciones
-                attachConversationsListener(uid)
+                // 2) Ahora sí, traemos las conversaciones del usuario
+                loadConversationsForUser(uid)
             }
             .addOnFailureListener {
-                // Si falla, igual enganchamos el listener (usando email como título)
-                attachConversationsListener(uid)
+                // Si falla, igual intentamos cargar las conversaciones (usando email como título)
+                loadConversationsForUser(uid)
             }
     }
 
-    private fun attachConversationsListener(uid: String) {
-        // Si ya había un listener, lo removemos
-        conversationsListener?.remove()
-
-        conversationsListener = db.collection("conversations")
+    private fun loadConversationsForUser(uid: String) {
+        db.collection("conversations")
             .whereArrayContains("participants", uid)
-            .addSnapshotListener { qs, error ->
-                if (error != null) {
-                    Toast.makeText(
-                        this,
-                        "Error cargando chats: ${error.localizedMessage}",
-                        Toast.LENGTH_LONG
-                    ).show()
-                    progressUsers.visibility = View.GONE
-                    return@addSnapshotListener
-                }
-
-                if (qs == null) {
-                    progressUsers.visibility = View.GONE
-                    return@addSnapshotListener
-                }
-
+            .get()
+            .addOnSuccessListener { qs ->
                 conversations.clear()
 
                 for (doc in qs.documents) {
@@ -201,23 +164,37 @@ class UsersActivity : AppCompatActivity() {
                     val hiddenFor =
                         (doc.get("hiddenFor") as? List<*>)?.mapNotNull { it as? String }
                             ?: emptyList()
-                    if (hiddenFor.contains(uid)) continue
+                    if (hiddenFor.contains(uid)) {
+                        continue
+                    }
 
                     val lastMessage = doc.getString("lastMessage") ?: "(sin mensajes)"
                     val lastTs = doc.getTimestamp("lastTimestamp")
-                    val lastFromUid = doc.getString("lastFromUid") // puede ser null en chats viejos
+                    val lastFromUid = doc.getString("lastFromUid")
 
-                    // --- LÓGICA LOCAL DE "NUEVO" ---
-                    val lastServerMillis = lastTs?.toDate()?.time ?: 0L
-                    val localKey = "last_read_$id"
+                    // --- NUEVO: cálculo combinado local + remoto para saber si hay no leídos ---
+
+                    // 1) millis del último mensaje
+                    val lastTsMillis = lastTs?.toDate()?.time ?: 0L
+
+                    // 2) Lectura LOCAL en este dispositivo
+                    val localKey = "last_read_${uid}_$id"
                     val localReadMillis = convoPrefs.getLong(localKey, 0L)
 
-                    val baseHasUnread =
-                        lastTs != null && lastServerMillis > localReadMillis
+                    // 3) Lectura REMOTA en Firestore (si existe)
+                    val myReadTs = doc.getTimestamp("readStatus.$uid")
+                    val remoteReadMillis = myReadTs?.toDate()?.time ?: 0L
 
-                    // Extra: si el último mensaje lo escribí YO, no lo marco como nuevo
-                    val hasUnread = baseHasUnread && lastFromUid != uid
-                    // --------------------------------
+                    // 4) Lo más avanzado de ambos (el usuario pudo leer en otro dispositivo)
+                    val effectiveReadMillis = maxOf(localReadMillis, remoteReadMillis)
+
+                    // 5) Regla final para "NUEVO"
+                    val hasUnread = when {
+                        lastTs == null -> false               // sin mensajes
+                        lastFromUid == uid -> false           // el último lo mandé yo
+                        effectiveReadMillis == 0L -> true     // nunca lo leí en ningún lado
+                        else -> lastTsMillis > effectiveReadMillis
+                    }
 
                     @Suppress("UNCHECKED_CAST")
                     val participantEmails =
@@ -269,108 +246,100 @@ class UsersActivity : AppCompatActivity() {
                 }
 
                 refreshLabels()
-                progressUsers.visibility = View.GONE
-            }
-    }
-
-    // --------------------------------------------------------------------
-    // Leído / eliminar
-    // --------------------------------------------------------------------
-    private fun markConversationLocallyRead(conv: ConversationItem) {
-        val millis = conv.lastTimestamp?.toDate()?.time ?: System.currentTimeMillis()
-        val key = "last_read_${conv.id}"
-        convoPrefs.edit().putLong(key, millis).apply()
-    }
-
-    private fun deleteConversationForUser(conv: ConversationItem) {
-        val uid = currentUid ?: return
-        val convId = conv.id
-
-        // 1) Marcarla oculta en Firestore para este usuario
-        db.collection("conversations")
-            .document(convId)
-            .update("hiddenFor", FieldValue.arrayUnion(uid))
-            .addOnSuccessListener {
-                // 2) Limpiar read local
-                val key = "last_read_$convId"
-                convoPrefs.edit().remove(key).apply()
-
-                // 3) Sacarla de la lista local
-                val idx = conversations.indexOfFirst { it.id == convId }
-                if (idx != -1) {
-                    conversations.removeAt(idx)
-                    refreshLabels()
-                }
             }
             .addOnFailureListener { e ->
                 Toast.makeText(
                     this,
-                    "Error al eliminar chat: ${e.localizedMessage}",
+                    "Error cargando chats: ${e.localizedMessage}",
+                    Toast.LENGTH_LONG
+                ).show()
+                refreshLabels()
+            }
+            .addOnCompleteListener {
+                progressUsers.visibility = View.GONE
+            }
+    }
+
+    private fun refreshLabels() {
+        // Ahora el adapter arma las filas, no usamos más Strings planos
+        adapter.notifyDataSetChanged()
+    }
+
+    private fun removeConversationForCurrentUser(conversationId: String) {
+        val uid = currentUid ?: return
+
+        val convRef = db.collection("conversations").document(conversationId)
+
+        // La conversación se oculta SOLO para este usuario usando hiddenFor
+        convRef.update("hiddenFor", FieldValue.arrayUnion(uid))
+            .addOnSuccessListener {
+                loadConversations()
+            }
+            .addOnFailureListener { e ->
+                Toast.makeText(
+                    this,
+                    "Error al ocultar chat: ${e.localizedMessage}",
                     Toast.LENGTH_LONG
                 ).show()
             }
     }
 
-    // --------------------------------------------------------------------
-    // Refresco de la lista
-    // --------------------------------------------------------------------
-    private fun refreshLabels() {
-        adapter.notifyDataSetChanged()
-    }
-
-    // --------------------------------------------------------------------
-    // Adapter custom para la lista de chats (estilo WhatsApp)
-    // --------------------------------------------------------------------
-    inner class ChatListAdapter(
-        context: Context,
+    // -------------------------------------------------------------
+    //   Adapter custom para la lista de chats
+    // -------------------------------------------------------------
+    private inner class ConversationsAdapter(
         private val items: List<ConversationItem>
-    ) : ArrayAdapter<ConversationItem>(context, 0, items) {
+    ) : BaseAdapter() {
+
+        override fun getCount(): Int = items.size
+
+        override fun getItem(position: Int): ConversationItem = items[position]
+
+        override fun getItemId(position: Int): Long = position.toLong()
 
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-            val rowView = convertView ?: LayoutInflater.from(context)
-                .inflate(R.layout.item_conversation, parent, false)
+            val view = convertView ?: LayoutInflater.from(this@UsersActivity)
+                .inflate(R.layout.item_conversation_summary, parent, false)
 
-            val txtAvatarInitials = rowView.findViewById<TextView>(R.id.txtAvatar)
-            val txtTitle = rowView.findViewById<TextView>(R.id.txtTitle)
-            val txtLastMessage = rowView.findViewById<TextView>(R.id.txtLastMessage)
-            val txtTime = rowView.findViewById<TextView>(R.id.txtTime)
-            val badgeUnread = rowView.findViewById<TextView>(R.id.badgeUnread)
+            val txtTitle = view.findViewById<TextView>(R.id.txtConversationTitle)
+            val txtLastMessage = view.findViewById<TextView>(R.id.txtConversationLastMessage)
+            val txtTime = view.findViewById<TextView>(R.id.txtConversationTime)
+            val txtUnread = view.findViewById<TextView>(R.id.txtConversationUnread)
 
-            val item = items[position]
+            val item = getItem(position)
 
-            // Iniciales (avatar tipo círculo con letras)
-            txtAvatarInitials.text = buildInitials(item.title)
-
-            // Título y último mensaje
             txtTitle.text = item.title
             txtLastMessage.text = item.lastMessage
 
-            // Hora (HH:mm)
-            val tsDate = item.lastTimestamp?.toDate()
-            txtTime.text = if (tsDate != null) {
-                android.text.format.DateFormat.format("HH:mm", tsDate)
+            // Hora o fecha (si no es de hoy)
+            val ts = item.lastTimestamp
+            if (ts != null) {
+                val date = ts.toDate()
+
+                val msgCal = Calendar.getInstance().apply { time = date }
+                val nowCal = Calendar.getInstance()
+
+                val sameDay =
+                    msgCal.get(Calendar.YEAR) == nowCal.get(Calendar.YEAR) &&
+                            msgCal.get(Calendar.DAY_OF_YEAR) == nowCal.get(Calendar.DAY_OF_YEAR)
+
+                val timeStr = android.text.format.DateFormat.format("HH:mm", date).toString()
+                val dateStr =
+                    if (sameDay) ""
+                    else android.text.format.DateFormat.format("dd/MM", date).toString()
+
+                // En la lista de chats suele alcanzar mostrar hora o, si es viejo, solo fecha
+                txtTime.text = if (dateStr.isEmpty()) timeStr else dateStr
+                txtTime.visibility = View.VISIBLE
             } else {
-                ""
+                txtTime.text = ""
+                txtTime.visibility = View.GONE
             }
 
-            // Badge de "NUEVO"
-            badgeUnread.visibility = if (item.hasUnread) View.VISIBLE else View.GONE
+            // Badge "NUEVO"
+            txtUnread.visibility = if (item.hasUnread) View.VISIBLE else View.GONE
 
-            return rowView
-        }
-
-        private fun buildInitials(name: String): String {
-            val parts = name.trim().split(" ")
-                .filter { it.isNotBlank() }
-            if (parts.isEmpty()) return "?"
-
-            return if (parts.size == 1) {
-                parts[0].take(2).uppercase()
-            } else {
-                (parts[0].take(1) + parts[1].take(1)).uppercase()
-            }
+            return view
         }
     }
 }
-
-

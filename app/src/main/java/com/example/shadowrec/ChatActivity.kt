@@ -9,9 +9,9 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.*
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import androidx.appcompat.app.AlertDialog
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
@@ -49,7 +49,7 @@ class ChatActivity : AppCompatActivity() {
         getSharedPreferences("shadowrec_prefs", MODE_PRIVATE)
     }
 
-    // Preferencias locales para NUEVO (coincide con UsersActivity)
+    // NUEVO: prefs locales solo para estado de conversaciones (NUEVO)
     private val convoPrefs by lazy {
         getSharedPreferences("shadowrec_conversations", MODE_PRIVATE)
     }
@@ -115,7 +115,6 @@ class ChatActivity : AppCompatActivity() {
             // Modo nuevo: ya tenemos conversación
             attachConversationListener(conversationId!!)
             startListeningMessages()
-            markConversationAsRead()
         } else {
             Toast.makeText(this, "Falta información de la conversación", Toast.LENGTH_SHORT).show()
             finish()
@@ -220,6 +219,7 @@ class ChatActivity : AppCompatActivity() {
                 }
 
                 messages.clear()
+
                 if (snapshot != null) {
                     for (doc in snapshot.documents) {
                         val text = doc.getString("text") ?: ""
@@ -244,7 +244,10 @@ class ChatActivity : AppCompatActivity() {
                     }
                 }
 
-                markConversationAsRead()
+                // Al recibir/actualizar mensajes, marcamos la conversación como leída
+                if (messages.isNotEmpty()) {
+                    markConversationAsRead()
+                }
             }
     }
 
@@ -286,6 +289,7 @@ class ChatActivity : AppCompatActivity() {
             .get()
             .addOnSuccessListener { snapshot ->
                 messages.clear()
+
                 for (doc in snapshot.documents) {
                     val text = doc.getString("text") ?: ""
                     val fromUid = doc.getString("fromUid") ?: ""
@@ -306,26 +310,44 @@ class ChatActivity : AppCompatActivity() {
                         listMessages.setSelection(messages.size - 1)
                     }
                 }
+
+                // También aquí, si recargamos todo, marcamos como leído
+                if (messages.isNotEmpty()) {
+                    markConversationAsRead()
+                }
             }
     }
 
+    /**
+     * Marca la conversación como leída PARA ESTE USUARIO.
+     * - Local: guarda la última vez que abriste este chat en este dispositivo.
+     * - Remoto: actualiza readStatus.{uid} en Firestore (opcional).
+     */
     private fun markConversationAsRead() {
         val uid = currentUid ?: return
         val convId = conversationId ?: return
 
-        // Marca local para NUEVO (UsersActivity la usa con last_read_...)
-        val now = System.currentTimeMillis()
-        convoPrefs.edit()
-            .putLong("last_read_$convId", now)
-            .apply()
+        // 1) LOCAL: momento de lectura en este dispositivo
+        val key = "last_read_${uid}_$convId"
+        val nowMillis = System.currentTimeMillis()
+        val previous = convoPrefs.getLong(key, 0L)
 
-        // Opcional: dejamos la marca en Firestore por compatibilidad
+        if (nowMillis > previous) {
+            convoPrefs.edit()
+                .putLong(key, nowMillis)
+                .apply()
+        }
+
+        // 2) REMOTO (opcional): marca de lectura en Firestore
         val update = mapOf(
             "readStatus.$uid" to FieldValue.serverTimestamp()
         )
         db.collection("conversations")
             .document(convId)
             .set(update, SetOptions.merge())
+            .addOnFailureListener {
+                // Si falla, el estado local igualmente evita que aparezca "NUEVO" en este dispositivo
+            }
     }
 
     // -------------------------------------------------------------
