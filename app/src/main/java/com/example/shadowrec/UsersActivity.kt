@@ -27,7 +27,7 @@ class UsersActivity : AppCompatActivity() {
         getSharedPreferences("shadowrec_prefs", MODE_PRIVATE)
     }
 
-    // NUEVO: mismas prefs que usa ChatActivity para "NUEVO"
+    // Mismas prefs que usa ChatActivity para "NUEVO"
     private val convoPrefs by lazy {
         getSharedPreferences("shadowrec_conversations", MODE_PRIVATE)
     }
@@ -45,7 +45,8 @@ class UsersActivity : AppCompatActivity() {
         val lastMessage: String,
         val hasUnread: Boolean,
         val participantEmails: List<String>,
-        val lastTimestamp: Timestamp?
+        val lastTimestamp: Timestamp?,
+        val lastReadMillis: Long      // <<< NUEVO: punto de lectura efectivo
     )
 
     private val conversations = mutableListOf<ConversationItem>()
@@ -79,6 +80,8 @@ class UsersActivity : AppCompatActivity() {
                 putExtra(ChatActivity.EXTRA_CONVERSATION_ID, conv.id)
                 putExtra(ChatActivity.EXTRA_IS_GROUP, conv.type == "group")
                 putExtra(ChatActivity.EXTRA_CHAT_TITLE, conv.title)
+                // >>> NUEVO: pasamos el punto de lectura efectivo a ChatActivity
+                putExtra(ChatActivity.EXTRA_LAST_READ_MILLIS, conv.lastReadMillis)
             }
             startActivity(i)
         }
@@ -113,7 +116,6 @@ class UsersActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Refrescamos al volver desde un chat o desde nuevo chat
         loadConversations()
     }
 
@@ -142,7 +144,6 @@ class UsersActivity : AppCompatActivity() {
                 loadConversationsForUser(uid)
             }
             .addOnFailureListener {
-                // Si falla, igual intentamos cargar las conversaciones (usando email como título)
                 loadConversationsForUser(uid)
             }
     }
@@ -159,7 +160,6 @@ class UsersActivity : AppCompatActivity() {
                     val type = doc.getString("type") ?: "direct"
                     val isGroup = type == "group"
 
-                    // Si la conversación está oculta para este usuario, la saltamos
                     @Suppress("UNCHECKED_CAST")
                     val hiddenFor =
                         (doc.get("hiddenFor") as? List<*>)?.mapNotNull { it as? String }
@@ -172,27 +172,21 @@ class UsersActivity : AppCompatActivity() {
                     val lastTs = doc.getTimestamp("lastTimestamp")
                     val lastFromUid = doc.getString("lastFromUid")
 
-                    // --- NUEVO: cálculo combinado local + remoto para saber si hay no leídos ---
-
-                    // 1) millis del último mensaje
+                    // --- Cálculo combinado local + remoto para saber si hay no leídos ---
                     val lastTsMillis = lastTs?.toDate()?.time ?: 0L
 
-                    // 2) Lectura LOCAL en este dispositivo
                     val localKey = "last_read_${uid}_$id"
                     val localReadMillis = convoPrefs.getLong(localKey, 0L)
 
-                    // 3) Lectura REMOTA en Firestore (si existe)
                     val myReadTs = doc.getTimestamp("readStatus.$uid")
                     val remoteReadMillis = myReadTs?.toDate()?.time ?: 0L
 
-                    // 4) Lo más avanzado de ambos (el usuario pudo leer en otro dispositivo)
                     val effectiveReadMillis = maxOf(localReadMillis, remoteReadMillis)
 
-                    // 5) Regla final para "NUEVO"
                     val hasUnread = when {
                         lastTs == null -> false               // sin mensajes
                         lastFromUid == uid -> false           // el último lo mandé yo
-                        effectiveReadMillis == 0L -> true     // nunca lo leí en ningún lado
+                        effectiveReadMillis == 0L -> true     // nunca lo leí
                         else -> lastTsMillis > effectiveReadMillis
                     }
 
@@ -235,12 +229,12 @@ class UsersActivity : AppCompatActivity() {
                             lastMessage = lastMessage,
                             hasUnread = hasUnread,
                             participantEmails = participantEmails,
-                            lastTimestamp = lastTs
+                            lastTimestamp = lastTs,
+                            lastReadMillis = effectiveReadMillis   // 👈 clave
                         )
                     )
                 }
 
-                // Ordenamos por último mensaje (más reciente arriba)
                 conversations.sortByDescending { conv ->
                     conv.lastTimestamp ?: Timestamp(0, 0)
                 }
@@ -261,7 +255,6 @@ class UsersActivity : AppCompatActivity() {
     }
 
     private fun refreshLabels() {
-        // Ahora el adapter arma las filas, no usamos más Strings planos
         adapter.notifyDataSetChanged()
     }
 
@@ -270,7 +263,6 @@ class UsersActivity : AppCompatActivity() {
 
         val convRef = db.collection("conversations").document(conversationId)
 
-        // La conversación se oculta SOLO para este usuario usando hiddenFor
         convRef.update("hiddenFor", FieldValue.arrayUnion(uid))
             .addOnSuccessListener {
                 loadConversations()
@@ -311,7 +303,6 @@ class UsersActivity : AppCompatActivity() {
             txtTitle.text = item.title
             txtLastMessage.text = item.lastMessage
 
-            // Hora o fecha (si no es de hoy)
             val ts = item.lastTimestamp
             if (ts != null) {
                 val date = ts.toDate()
@@ -328,7 +319,6 @@ class UsersActivity : AppCompatActivity() {
                     if (sameDay) ""
                     else android.text.format.DateFormat.format("dd/MM", date).toString()
 
-                // En la lista de chats suele alcanzar mostrar hora o, si es viejo, solo fecha
                 txtTime.text = if (dateStr.isEmpty()) timeStr else dateStr
                 txtTime.visibility = View.VISIBLE
             } else {
@@ -336,7 +326,6 @@ class UsersActivity : AppCompatActivity() {
                 txtTime.visibility = View.GONE
             }
 
-            // Badge "NUEVO"
             txtUnread.visibility = if (item.hasUnread) View.VISIBLE else View.GONE
 
             return view
