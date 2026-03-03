@@ -2,6 +2,8 @@ package com.example.shadowrec
 
 import android.content.Intent
 import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -20,6 +22,7 @@ class UsersActivity : AppCompatActivity() {
     private lateinit var listUsers: ListView          // ahora lista de CHATS
     private lateinit var progressUsers: ProgressBar
     private lateinit var btnNewChat: Button
+    private lateinit var edtSearchChats: EditText     // <<< NUEVO: buscador
 
     private val db by lazy { Firebase.firestore }
     private val auth by lazy { FirebaseAuth.getInstance() }
@@ -46,9 +49,13 @@ class UsersActivity : AppCompatActivity() {
         val hasUnread: Boolean,
         val participantEmails: List<String>,
         val lastTimestamp: Timestamp?,
-        val lastReadMillis: Long      // <<< NUEVO: punto de lectura efectivo
+        val lastReadMillis: Long      // punto de lectura efectivo
     )
 
+    // Lista completa (sin filtrar)
+    private val allConversations = mutableListOf<ConversationItem>()
+
+    // Lista que se muestra (filtrada o no)
     private val conversations = mutableListOf<ConversationItem>()
     private lateinit var adapter: ConversationsAdapter
 
@@ -59,6 +66,7 @@ class UsersActivity : AppCompatActivity() {
         listUsers = findViewById(R.id.listUsers)
         progressUsers = findViewById(R.id.progressUsers)
         btnNewChat = findViewById(R.id.btnNewChat)
+        edtSearchChats = findViewById(R.id.edtSearchChats)   // <<< NUEVO
 
         adapter = ConversationsAdapter(conversations)
         listUsers.adapter = adapter
@@ -80,7 +88,6 @@ class UsersActivity : AppCompatActivity() {
                 putExtra(ChatActivity.EXTRA_CONVERSATION_ID, conv.id)
                 putExtra(ChatActivity.EXTRA_IS_GROUP, conv.type == "group")
                 putExtra(ChatActivity.EXTRA_CHAT_TITLE, conv.title)
-                // >>> NUEVO: pasamos el punto de lectura efectivo a ChatActivity
                 putExtra(ChatActivity.EXTRA_LAST_READ_MILLIS, conv.lastReadMillis)
             }
             startActivity(i)
@@ -111,6 +118,15 @@ class UsersActivity : AppCompatActivity() {
             startActivity(i)
         }
 
+        // 🔍 Listener del buscador
+        edtSearchChats.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                applyFilter(s?.toString() ?: "")
+            }
+        })
+
         loadConversations()
     }
 
@@ -126,7 +142,9 @@ class UsersActivity : AppCompatActivity() {
         }
 
         progressUsers.visibility = View.VISIBLE
+        allConversations.clear()
         conversations.clear()
+        adapter.notifyDataSetChanged()
 
         // 1) Traemos TODOS los usuarios una vez para armar mapa email -> nombre
         db.collection("users")
@@ -153,7 +171,7 @@ class UsersActivity : AppCompatActivity() {
             .whereArrayContains("participants", uid)
             .get()
             .addOnSuccessListener { qs ->
-                conversations.clear()
+                allConversations.clear()
 
                 for (doc in qs.documents) {
                     val id = doc.id
@@ -172,7 +190,6 @@ class UsersActivity : AppCompatActivity() {
                     val lastTs = doc.getTimestamp("lastTimestamp")
                     val lastFromUid = doc.getString("lastFromUid")
 
-                    // --- Cálculo combinado local + remoto para saber si hay no leídos ---
                     val lastTsMillis = lastTs?.toDate()?.time ?: 0L
 
                     val localKey = "last_read_${uid}_$id"
@@ -221,7 +238,7 @@ class UsersActivity : AppCompatActivity() {
                         }
                     }
 
-                    conversations.add(
+                    allConversations.add(
                         ConversationItem(
                             id = id,
                             type = type,
@@ -230,16 +247,19 @@ class UsersActivity : AppCompatActivity() {
                             hasUnread = hasUnread,
                             participantEmails = participantEmails,
                             lastTimestamp = lastTs,
-                            lastReadMillis = effectiveReadMillis   // 👈 clave
+                            lastReadMillis = effectiveReadMillis
                         )
                     )
                 }
 
-                conversations.sortByDescending { conv ->
+                // Ordenamos la lista completa
+                allConversations.sortByDescending { conv ->
                     conv.lastTimestamp ?: Timestamp(0, 0)
                 }
 
-                refreshLabels()
+                // Aplicamos el filtro actual (si hubiera algo escrito)
+                val currentQuery = edtSearchChats.text?.toString() ?: ""
+                applyFilter(currentQuery)
             }
             .addOnFailureListener { e ->
                 Toast.makeText(
@@ -247,14 +267,37 @@ class UsersActivity : AppCompatActivity() {
                     "Error cargando chats: ${e.localizedMessage}",
                     Toast.LENGTH_LONG
                 ).show()
-                refreshLabels()
+                // aún así intentamos refrescar algo
+                applyFilter(edtSearchChats.text?.toString() ?: "")
             }
             .addOnCompleteListener {
                 progressUsers.visibility = View.GONE
             }
     }
 
-    private fun refreshLabels() {
+    /**
+     * Aplica el texto del buscador sobre allConversations
+     * y vuelca el resultado en conversations (que es lo que ve el adapter).
+     */
+    private fun applyFilter(query: String) {
+        val q = query.trim().lowercase()
+
+        conversations.clear()
+
+        if (q.isEmpty()) {
+            conversations.addAll(allConversations)
+        } else {
+            for (conv in allConversations) {
+                val inTitle = conv.title.lowercase().contains(q)
+                val inLastMessage = conv.lastMessage.lowercase().contains(q)
+                val inEmails = conv.participantEmails.any { it.lowercase().contains(q) }
+
+                if (inTitle || inLastMessage || inEmails) {
+                    conversations.add(conv)
+                }
+            }
+        }
+
         adapter.notifyDataSetChanged()
     }
 
