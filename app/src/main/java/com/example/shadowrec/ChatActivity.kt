@@ -30,7 +30,7 @@ class ChatActivity : AppCompatActivity() {
         const val EXTRA_IS_GROUP = "extra_is_group"
         const val EXTRA_CHAT_TITLE = "extra_chat_title"
 
-        // 👉 NUEVO: punto de lectura calculado en UsersActivity
+        // Punto de lectura calculado en UsersActivity
         const val EXTRA_LAST_READ_MILLIS = "extra_last_read_millis"
     }
 
@@ -138,10 +138,10 @@ class ChatActivity : AppCompatActivity() {
             updateAvatarFromTitle(initialTitle)
         }
 
-        // 🔹 PRIMERO: intentamos usar el punto de lectura que viene de UsersActivity
+        // 1️⃣ Intentamos usar el punto de lectura que viene de UsersActivity
         initialLastReadMillis = intent.getLongExtra(EXTRA_LAST_READ_MILLIS, 0L)
 
-        // 🔹 SI NO VINO (0), caemos al comportamiento viejo: leer de SharedPreferences
+        // 2️⃣ Si no vino (0), leemos de SharedPreferences (comportamiento viejo)
         if (initialLastReadMillis == 0L) {
             currentUid?.let { uid ->
                 conversationId?.let { convId ->
@@ -723,6 +723,35 @@ class ChatActivity : AppCompatActivity() {
     }
 
     // -------------------------------------------------------------
+    //   Helper separador de fecha
+    // -------------------------------------------------------------
+    private fun formatDateSeparator(ts: Timestamp): String {
+        val date = ts.toDate()
+
+        val msgCal = Calendar.getInstance().apply { time = date }
+        val todayCal = Calendar.getInstance()
+        val yesterdayCal = Calendar.getInstance().apply {
+            add(Calendar.DAY_OF_YEAR, -1)
+        }
+
+        val sameDayToday =
+            msgCal.get(Calendar.YEAR) == todayCal.get(Calendar.YEAR) &&
+                    msgCal.get(Calendar.DAY_OF_YEAR) == todayCal.get(Calendar.DAY_OF_YEAR)
+
+        val sameDayYesterday =
+            msgCal.get(Calendar.YEAR) == yesterdayCal.get(Calendar.YEAR) &&
+                    msgCal.get(Calendar.DAY_OF_YEAR) == yesterdayCal.get(Calendar.DAY_OF_YEAR)
+
+        return when {
+            sameDayToday -> "Hoy"
+            sameDayYesterday -> "Ayer"
+            else -> android.text.format.DateFormat
+                .format("dd/MM/yyyy", date)
+                .toString()
+        }
+    }
+
+    // -------------------------------------------------------------
     //   Adapter de mensajes
     // -------------------------------------------------------------
     private inner class ChatMessagesAdapter(
@@ -737,6 +766,7 @@ class ChatActivity : AppCompatActivity() {
             val view = convertView ?: LayoutInflater.from(this@ChatActivity)
                 .inflate(R.layout.item_message, parent, false)
 
+            val dateSeparator = view.findViewById<TextView>(R.id.txtDateSeparator)
             val root = view.findViewById<LinearLayout>(R.id.messageRowRoot)
             val bubble = view.findViewById<LinearLayout>(R.id.messageBubble)
             val txtBody = view.findViewById<TextView>(R.id.txtMessageBody)
@@ -746,13 +776,17 @@ class ChatActivity : AppCompatActivity() {
             val myUid = currentUid
             val isMine = myUid != null && item.fromUid == myUid
 
+            // Alineamos burbuja izquierda/derecha
             root.gravity = if (isMine) Gravity.END else Gravity.START
 
+            // Fondo según quién envía
             val bgRes = if (isMine) R.drawable.bg_message_me else R.drawable.bg_message_other
             bubble.background = ContextCompat.getDrawable(this@ChatActivity, bgRes)
 
+            // Texto del mensaje
             txtBody.text = item.labelText
 
+            // Hora (y fecha si no es hoy) dentro de la burbuja
             val ts = item.createdAt
             if (ts != null) {
                 val date = ts.toDate()
@@ -775,6 +809,38 @@ class ChatActivity : AppCompatActivity() {
                 txtTime.visibility = View.GONE
             }
 
+            // Separador de fecha (Hoy / Ayer / dd/MM/yyyy)
+            if (ts == null) {
+                dateSeparator.visibility = View.GONE
+            } else {
+                val thisCal = Calendar.getInstance().apply { time = ts.toDate() }
+
+                val showSeparator: Boolean = if (position == 0) {
+                    // Primer mensaje de la lista → siempre muestra fecha
+                    true
+                } else {
+                    val prevItem = getItem(position - 1)
+                    val prevTs = prevItem.createdAt
+                    if (prevTs == null) {
+                        true
+                    } else {
+                        val prevCal = Calendar.getInstance().apply { time = prevTs.toDate() }
+                        !(
+                                thisCal.get(Calendar.YEAR) == prevCal.get(Calendar.YEAR) &&
+                                        thisCal.get(Calendar.DAY_OF_YEAR) == prevCal.get(Calendar.DAY_OF_YEAR)
+                                )
+                    }
+                }
+
+                if (showSeparator) {
+                    dateSeparator.visibility = View.VISIBLE
+                    dateSeparator.text = formatDateSeparator(ts)
+                } else {
+                    dateSeparator.visibility = View.GONE
+                }
+            }
+
+            // Long press sobre la burbuja -> menú contextual
             bubble.setOnLongClickListener {
                 showMessageOptionsDialog(item)
                 true

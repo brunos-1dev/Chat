@@ -1,38 +1,61 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/messageRowRoot"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:orientation="horizontal"
-    android:padding="4dp"
-    android:gravity="start">
+    android:orientation="vertical"
+    android:paddingTop="4dp"
+    android:paddingBottom="4dp">
 
-    <LinearLayout
-        android:id="@+id/messageBubble"
-        android:layout_width="wrap_content"
+    <!-- 🔹 Separador de fecha -->
+    <TextView
+        android:id="@+id/txtDateSeparator"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="8dp"
-        android:background="@drawable/bg_message_other">
+        android:gravity="center"
+        android:paddingTop="4dp"
+        android:paddingBottom="4dp"
+        android:text="Hoy"
+        android:textSize="12sp"
+        android:textColor="@android:color/white"
+        android:alpha="0.7"
+        android:visibility="gone" />
 
-        <!-- Texto: incluye "Yo: mensaje" o "Nombre: mensaje" -->
-        <TextView
-            android:id="@+id/txtMessageBody"
+    <!-- 🔹 Contenedor de la burbuja (se alinea izquierda/derecha desde el código) -->
+    <LinearLayout
+        android:id="@+id/messageRowRoot"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="start">
+
+        <!-- Burbuja del mensaje -->
+        <LinearLayout
+            android:id="@+id/messageBubble"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="14sp"
-            android:textColor="@android:color/black"
-            android:maxWidth="260dp" />
+            android:orientation="vertical"
+            android:paddingLeft="12dp"
+            android:paddingRight="12dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="4dp">
 
-        <!-- Hora chiquita abajo a la derecha -->
-        <TextView
-            android:id="@+id/txtMessageTime"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textSize="10sp"
-            android:textColor="#888888"
-            android:layout_gravity="end"
-            android:paddingTop="2dp" />
+            <TextView
+                android:id="@+id/txtMessageBody"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Mensaje"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/txtMessageTime"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="12:34"
+                android:textSize="11sp"
+                android:alpha="0.7" />
+        </LinearLayout>
+
     </LinearLayout>
 
 </LinearLayout>

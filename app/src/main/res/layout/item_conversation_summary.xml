@@ -22,7 +22,6 @@
             android:layout_weight="1"
             android:text="Título"
             android:textSize="16sp"
-            android:textStyle="bold"
             android:maxLines="1"
             android:ellipsize="end"
             android:textColor="@color/sr_text_primary" />

@@ -16,6 +16,8 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
 import java.util.Calendar
+import android.graphics.Typeface
+import androidx.core.content.ContextCompat
 
 class UsersActivity : AppCompatActivity() {
 
@@ -346,6 +348,26 @@ class UsersActivity : AppCompatActivity() {
             txtTitle.text = item.title
             txtLastMessage.text = item.lastMessage
 
+            // Colores base (ya existen en tu proyecto)
+            val primaryColor = ContextCompat.getColor(this@UsersActivity, R.color.sr_text_primary)
+            val secondaryColor = ContextCompat.getColor(this@UsersActivity, R.color.sr_text_secondary)
+
+            // 🔥 Estilo según tenga o no mensajes no leídos
+            if (item.hasUnread) {
+                // Chat con mensajes nuevos
+                txtTitle.setTypeface(null, Typeface.BOLD)
+                txtLastMessage.setTypeface(null, Typeface.BOLD)
+                txtTitle.setTextColor(primaryColor)
+                txtLastMessage.setTextColor(primaryColor)
+            } else {
+                // Chat leído
+                txtTitle.setTypeface(null, Typeface.NORMAL)
+                txtLastMessage.setTypeface(null, Typeface.NORMAL)
+                txtTitle.setTextColor(secondaryColor)
+                txtLastMessage.setTextColor(secondaryColor)
+            }
+
+            // Hora / fecha
             val ts = item.lastTimestamp
             if (ts != null) {
                 val date = ts.toDate()
@@ -369,6 +391,7 @@ class UsersActivity : AppCompatActivity() {
                 txtTime.visibility = View.GONE
             }
 
+            // Badge "NUEVO"
             txtUnread.visibility = if (item.hasUnread) View.VISIBLE else View.GONE
 
             return view
