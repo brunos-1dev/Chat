@@ -116,10 +116,11 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // ✅ Chequeo de sesión al entrar a la app
+        // ✅ Chequeo de sesión al entrar a la app con backend propio
         val profileComplete = prefs.getBoolean("user_profile_complete", false)
-        val currentUser = FirebaseAuth.getInstance().currentUser
-        if (!profileComplete || currentUser == null) {
+        val token = prefs.getString("auth_token", null)
+
+        if (!profileComplete || token.isNullOrEmpty()) {
             val authIntent = Intent(this, AuthActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
             }
@@ -147,10 +148,7 @@ class MainActivity : AppCompatActivity() {
                 stopLocationTrackingService()
             }
 
-            // 2) cerrar sesión de Firebase
-            FirebaseAuth.getInstance().signOut()
-
-            // 3) limpiar preferencias locales
+            // 2) limpiar preferencias locales
             prefs.edit().clear().apply()
             convoPrefs.edit().clear().apply()
 

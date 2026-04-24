@@ -7,14 +7,11 @@ import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.ktx.firestore
-import com.google.firebase.ktx.Firebase
+import retrofit2.Call
+import retrofit2.Callback
+import retrofit2.Response
 
 class AuthActivity : AppCompatActivity() {
-
-    private lateinit var auth: FirebaseAuth
-    private val db by lazy { Firebase.firestore }
 
     private val prefs by lazy {
         getSharedPreferences("shadowrec_prefs", MODE_PRIVATE)
@@ -23,27 +20,23 @@ class AuthActivity : AppCompatActivity() {
     private lateinit var edtEmail: EditText
     private lateinit var edtPassword: EditText
     private lateinit var btnLogin: Button
-    private lateinit var txtGoToRegister: TextView    // link “Crear cuenta”
+    private lateinit var txtGoToRegister: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_auth)
-
-        auth = FirebaseAuth.getInstance()
 
         edtEmail = findViewById(R.id.edtEmail)
         edtPassword = findViewById(R.id.edtPassword)
         btnLogin = findViewById(R.id.btnLogin)
         txtGoToRegister = findViewById(R.id.txtGoToRegister)
 
-        // Ingresar
         btnLogin.setOnClickListener { loginUser() }
 
         txtGoToRegister.setOnClickListener {
             val i = Intent(this, RegisterActivity::class.java)
             startActivity(i)
         }
-
     }
 
     private fun loginUser() {
@@ -59,67 +52,68 @@ class AuthActivity : AppCompatActivity() {
             return
         }
 
-        auth.signInWithEmailAndPassword(email, password)
-            .addOnSuccessListener { result ->
-                val user = result.user
-                val uid = user?.uid
+        val request = LoginRequest(
+            email = email,
+            password = password
+        )
 
-                if (uid == null) {
-                    Toast.makeText(this, "No se pudo obtener el usuario", Toast.LENGTH_LONG).show()
-                    return@addOnSuccessListener
+        ApiClient.authService.login(request).enqueue(object : Callback<LoginResponse> {
+            override fun onResponse(
+                call: Call<LoginResponse>,
+                response: Response<LoginResponse>
+            ) {
+                if (!response.isSuccessful) {
+                    Toast.makeText(
+                        this@AuthActivity,
+                        "Error al iniciar sesión",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return
                 }
 
-                // Leemos el perfil en users/{uid} (nuevo esquema por uid)
-                db.collection("users")
-                    .document(uid)
-                    .get()
-                    .addOnSuccessListener { doc ->
-                        val firstName = doc.getString("firstName") ?: ""
-                        val lastName = doc.getString("lastName") ?: ""
-                        val emailSaved = doc.getString("email") ?: email
+                val body = response.body()
 
-                        // Guardamos datos básicos en prefs
-                        prefs.edit()
-                            .putString("user_first_name", firstName)
-                            .putString("user_last_name", lastName)
-                            .putString("user_email", emailSaved)
-                            .putBoolean("user_profile_complete", true)
-                            .apply()
+                if (body == null || !body.ok || body.usuario == null || body.token == null) {
+                    Toast.makeText(
+                        this@AuthActivity,
+                        body?.message ?: "Credenciales inválidas",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return
+                }
 
-                        Toast.makeText(this, "Sesión iniciada", Toast.LENGTH_SHORT).show()
+                val usuario = body.usuario
 
-                        // Ir a MainActivity y limpiar el backstack
-                        val i = Intent(this, MainActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                        }
-                        startActivity(i)
-                        finish()
-                    }
-                    .addOnFailureListener {
-                        // Si falla la lectura, igual marcamos la sesión como iniciada
-                        prefs.edit()
-                            .putBoolean("user_profile_complete", true)
-                            .apply()
+                prefs.edit()
+                    .putString("auth_token", body.token)
+                    .putInt("user_id", usuario.id)
+                    .putString("user_first_name", usuario.nombre)
+                    .putString("user_last_name", usuario.apellido)
+                    .putString("user_email", usuario.email)
+                    .putString("device_id", usuario.device_id)
+                    .putBoolean("user_profile_complete", true)
+                    .apply()
 
-                        Toast.makeText(
-                            this,
-                            "Sesión iniciada (sin cargar perfil completo)",
-                            Toast.LENGTH_SHORT
-                        ).show()
-
-                        val i = Intent(this, MainActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                        }
-                        startActivity(i)
-                        finish()
-                    }
-            }
-            .addOnFailureListener { e ->
                 Toast.makeText(
-                    this,
-                    "Error al iniciar sesión: ${e.localizedMessage}",
+                    this@AuthActivity,
+                    "Sesión iniciada",
+                    Toast.LENGTH_SHORT
+                ).show()
+
+                val i = Intent(this@AuthActivity, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                }
+                startActivity(i)
+                finish()
+            }
+
+            override fun onFailure(call: Call<LoginResponse>, t: Throwable) {
+                Toast.makeText(
+                    this@AuthActivity,
+                    "Error de conexión: ${t.localizedMessage}",
                     Toast.LENGTH_LONG
                 ).show()
             }
+        })
     }
 }

@@ -18,6 +18,9 @@ import com.google.firebase.ktx.Firebase
 import java.util.Calendar
 import android.graphics.Typeface
 import androidx.core.content.ContextCompat
+import retrofit2.Call
+import retrofit2.Callback
+import retrofit2.Response
 
 class UsersActivity : AppCompatActivity() {
 
@@ -73,14 +76,17 @@ class UsersActivity : AppCompatActivity() {
         adapter = ConversationsAdapter(conversations)
         listUsers.adapter = adapter
 
-        val user = auth.currentUser
-        if (user == null) {
+        val userId = prefs.getInt("user_id", -1)
+        val userEmail = prefs.getString("user_email", null)
+
+        if (userId == -1 || userEmail.isNullOrEmpty()) {
             Toast.makeText(this, "No hay usuario logueado", Toast.LENGTH_SHORT).show()
             finish()
             return
         }
-        currentUid = user.uid
-        currentEmail = prefs.getString("user_email", user.email) ?: user.email
+
+        currentUid = userId.toString()
+        currentEmail = userEmail
 
         // Tap sobre un chat -> abrir ChatActivity
         listUsers.setOnItemClickListener { _, _, position, _ ->
@@ -138,8 +144,10 @@ class UsersActivity : AppCompatActivity() {
     }
 
     private fun loadConversations() {
-        val uid = currentUid ?: run {
-            Toast.makeText(this, "No hay usuario logueado", Toast.LENGTH_SHORT).show()
+        val token = prefs.getString("auth_token", null)
+
+        if (token.isNullOrEmpty()) {
+            Toast.makeText(this, "No hay token de sesión", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -148,24 +156,63 @@ class UsersActivity : AppCompatActivity() {
         conversations.clear()
         adapter.notifyDataSetChanged()
 
-        // 1) Traemos TODOS los usuarios una vez para armar mapa email -> nombre
-        db.collection("users")
-            .get()
-            .addOnSuccessListener { qs ->
-                userNameByEmail.clear()
-                for (doc in qs.documents) {
-                    val email = doc.getString("email") ?: continue
-                    val first = doc.getString("firstName") ?: ""
-                    val last = doc.getString("lastName") ?: ""
-                    val name = (first + " " + last).trim().ifEmpty { email }
-                    userNameByEmail[email] = name
+        ApiClient.authService.getConversations("Bearer $token")
+            .enqueue(object : Callback<ConversationsResponse> {
+                override fun onResponse(
+                    call: Call<ConversationsResponse>,
+                    response: Response<ConversationsResponse>
+                ) {
+                    progressUsers.visibility = View.GONE
+
+                    if (!response.isSuccessful) {
+                        Toast.makeText(
+                            this@UsersActivity,
+                            "Error cargando chats",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return
+                    }
+
+                    val body = response.body()
+
+                    if (body == null || !body.ok) {
+                        Toast.makeText(
+                            this@UsersActivity,
+                            "No se pudieron cargar los chats",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return
+                    }
+
+                    allConversations.clear()
+
+                    for (conv in body.conversations) {
+                        allConversations.add(
+                            ConversationItem(
+                                id = conv.id.toString(),
+                                type = conv.type,
+                                title = conv.title,
+                                lastMessage = conv.lastMessage,
+                                hasUnread = conv.hasUnread,
+                                participantEmails = conv.participantEmails,
+                                lastTimestamp = null,
+                                lastReadMillis = conv.lastReadMillis
+                            )
+                        )
+                    }
+
+                    applyFilter(edtSearchChats.text?.toString() ?: "")
                 }
-                // 2) Ahora sí, traemos las conversaciones del usuario
-                loadConversationsForUser(uid)
-            }
-            .addOnFailureListener {
-                loadConversationsForUser(uid)
-            }
+
+                override fun onFailure(call: Call<ConversationsResponse>, t: Throwable) {
+                    progressUsers.visibility = View.GONE
+                    Toast.makeText(
+                        this@UsersActivity,
+                        "Error de conexión: ${t.localizedMessage}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            })
     }
 
     private fun loadConversationsForUser(uid: String) {
