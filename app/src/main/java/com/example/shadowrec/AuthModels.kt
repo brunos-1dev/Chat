@@ -43,3 +43,40 @@ data class ConversationApi(
     val lastTimestamp: String?,
     val lastReadMillis: Long
 )
+
+data class UsersResponse(
+    val ok: Boolean,
+    val users: List<UserApi>
+)
+
+data class UserApi(
+    val id: Int,
+    val nombre: String,
+    val apellido: String,
+    val email: String
+)
+
+data class CreateConversationRequest(
+    val emails: List<String>,
+    val nombre: String?
+)
+
+data class CreateConversationResponse(
+    val ok: Boolean,
+    val conversacion_id: Int
+)
+
+data class MessagesResponse(
+    val ok: Boolean,
+    val messages: List<MessageApi>
+)
+
+data class MessageApi(
+    val id: Int,
+    val conversationId: Int,
+    val fromUid: String,
+    val fromEmail: String?,
+    val fromName: String?,
+    val text: String,
+    val createdAt: String?
+)

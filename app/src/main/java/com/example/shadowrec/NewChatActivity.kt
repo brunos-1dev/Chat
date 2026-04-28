@@ -5,11 +5,9 @@ import android.os.Bundle
 import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.FieldValue
-import com.google.firebase.firestore.SetOptions
-import com.google.firebase.firestore.ktx.firestore
-import com.google.firebase.ktx.Firebase
+import retrofit2.Call
+import retrofit2.Callback
+import retrofit2.Response
 
 class NewChatActivity : AppCompatActivity() {
 
@@ -17,10 +15,6 @@ class NewChatActivity : AppCompatActivity() {
     private lateinit var listUsers: ListView
     private lateinit var progress: ProgressBar
     private lateinit var btnCreate: Button
-
-    private val db by lazy { Firebase.firestore }
-    private val auth by lazy { FirebaseAuth.getInstance() }
-
     private var currentUid: String? = null
     private var currentEmail: String? = null
 
@@ -32,6 +26,9 @@ class NewChatActivity : AppCompatActivity() {
 
     private val users = mutableListOf<UserItem>()
     private lateinit var adapter: ArrayAdapter<String>
+    private val prefs by lazy {
+        getSharedPreferences("shadowrec_prefs", MODE_PRIVATE)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,14 +39,17 @@ class NewChatActivity : AppCompatActivity() {
         progress = findViewById(R.id.progressSelectableUsers)
         btnCreate = findViewById(R.id.btnCreateChat)
 
-        val user = auth.currentUser
-        if (user == null) {
+        val userId = prefs.getInt("user_id", -1)
+        val userEmail = prefs.getString("user_email", null)
+
+        if (userId == -1 || userEmail.isNullOrEmpty()) {
             Toast.makeText(this, "No hay usuario logueado", Toast.LENGTH_SHORT).show()
             finish()
             return
         }
-        currentUid = user.uid
-        currentEmail = user.email
+
+        currentUid = userId.toString()
+        currentEmail = userEmail
 
         adapter = ArrayAdapter(
             this,
@@ -67,49 +67,85 @@ class NewChatActivity : AppCompatActivity() {
     }
 
     private fun loadUsers() {
+        val token = prefs.getString("auth_token", null)
+
+        if (token.isNullOrEmpty()) {
+            Toast.makeText(this, "No hay token de sesión", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         progress.visibility = View.VISIBLE
 
-        db.collection("users")
-            .get()
-            .addOnSuccessListener { qs ->
-                users.clear()
-                val labels = mutableListOf<String>()
-                val meUid = currentUid
+        ApiClient.authService.getUsers("Bearer $token")
+            .enqueue(object : Callback<UsersResponse> {
+                override fun onResponse(
+                    call: Call<UsersResponse>,
+                    response: Response<UsersResponse>
+                ) {
+                    progress.visibility = View.GONE
 
-                for (doc in qs.documents) {
-                    val uid = doc.getString("uid") ?: doc.id
-                    if (uid == meUid) continue  // no me agrego a mí mismo, lo hago siempre por código
+                    if (!response.isSuccessful) {
+                        Toast.makeText(
+                            this@NewChatActivity,
+                            "Error cargando usuarios",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return
+                    }
 
-                    val email = doc.getString("email") ?: ""
-                    val first = doc.getString("firstName") ?: ""
-                    val last = doc.getString("lastName") ?: ""
-                    val name = (first + " " + last).trim().ifEmpty { email }
+                    val body = response.body()
 
-                    users.add(UserItem(uid, name, email))
-                    labels.add("$name\n$email")
+                    if (body == null || !body.ok) {
+                        Toast.makeText(
+                            this@NewChatActivity,
+                            "No se pudieron cargar los usuarios",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return
+                    }
+
+                    users.clear()
+                    val labels = mutableListOf<String>()
+
+                    for (u in body.users) {
+                        val name = "${u.nombre} ${u.apellido}".trim().ifEmpty { u.email }
+
+                        users.add(
+                            UserItem(
+                                uid = u.id.toString(),
+                                name = name,
+                                email = u.email
+                            )
+                        )
+
+                        labels.add("$name\n${u.email}")
+                    }
+
+                    adapter.clear()
+                    adapter.addAll(labels)
+                    adapter.notifyDataSetChanged()
                 }
 
-                adapter.clear()
-                adapter.addAll(labels)
-                adapter.notifyDataSetChanged()
-            }
-            .addOnFailureListener { e ->
-                Toast.makeText(
-                    this,
-                    "Error cargando usuarios: ${e.localizedMessage}",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-            .addOnCompleteListener {
-                progress.visibility = View.GONE
-            }
+                override fun onFailure(call: Call<UsersResponse>, t: Throwable) {
+                    progress.visibility = View.GONE
+                    Toast.makeText(
+                        this@NewChatActivity,
+                        "Error de conexión: ${t.localizedMessage}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            })
     }
 
     private fun createChat() {
-        val meUid = currentUid ?: return
-        val meEmail = currentEmail
 
-        // Qué usuarios tildó el usuario en la lista
+        val token = prefs.getString("auth_token", null)
+
+        if (token.isNullOrEmpty()) {
+            Toast.makeText(this, "No hay token de sesión", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         val checked = listUsers.checkedItemPositions
         val selectedUsers = mutableListOf<UserItem>()
 
@@ -124,75 +160,70 @@ class NewChatActivity : AppCompatActivity() {
             return
         }
 
-        // UIDs y emails de TODOS los participantes (yo + seleccionados)
-        val allUids = mutableListOf<String>().apply {
-            add(meUid)
-            addAll(selectedUsers.map { it.uid })
-        }
-
-        val allEmails = mutableListOf<String>().apply {
-            meEmail?.let { add(it) }
-            addAll(selectedUsers.mapNotNull { u ->
-                u.email.takeIf { it.isNotBlank() }
-            })
-        }
-
         val isGroup = selectedUsers.size > 1
         val groupName = edtGroupName.text.toString().trim()
-        val type = if (isGroup) "group" else "direct"
 
-        val titleForIntent: String = if (isGroup) {
-            if (groupName.isNotEmpty()) groupName
-            else "Grupo sin nombre"
+        val titleForIntent = if (isGroup) {
+            if (groupName.isNotEmpty()) groupName else "Grupo sin nombre"
         } else {
             val other = selectedUsers.first()
             other.name.ifBlank { other.email }
         }
 
-        // === CLAVE: ID de la conversación ===
-        // - Directo (1 persona): usamos un ID determinístico por pareja de UIDs
-        //   → si ya existía, lo reusa; si no, crea uno nuevo con ese mismo ID.
-        // - Grupo: dejamos que Firestore genere un ID aleatorio.
-        val convDoc = if (!isGroup) {
-            val otherUid = selectedUsers.first().uid
-            val convId = conversationIdFor(meUid, otherUid)
-            db.collection("conversations").document(convId)
-        } else {
-            db.collection("conversations").document()
-        }
-
-        val data = hashMapOf<String, Any?>(
-            "type" to type,
-            "participants" to allUids,
-            "participantEmails" to allEmails,
-            "lastMessage" to "",
-            "lastTimestamp" to FieldValue.serverTimestamp(),
-            "hiddenFor" to emptyList<String>()    // por si usás ocultar chat
+        val request = CreateConversationRequest(
+            emails = selectedUsers.map { it.email },
+            nombre = if (isGroup && groupName.isNotEmpty()) groupName else null
         )
 
-        if (isGroup && groupName.isNotEmpty()) {
-            data["name"] = groupName
-        }
+        ApiClient.authService.createConversation("Bearer $token", request)
+            .enqueue(object : Callback<CreateConversationResponse> {
+                override fun onResponse(
+                    call: Call<CreateConversationResponse>,
+                    response: Response<CreateConversationResponse>
+                ) {
+                    if (!response.isSuccessful) {
+                        Toast.makeText(
+                            this@NewChatActivity,
+                            "Error creando chat",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return
+                    }
 
-        convDoc.set(data, SetOptions.merge())
-            .addOnSuccessListener {
-                val convId = convDoc.id
+                    val body = response.body()
 
-                val i = Intent(this, ChatActivity::class.java).apply {
-                    putExtra(ChatActivity.EXTRA_CONVERSATION_ID, convId)
-                    putExtra(ChatActivity.EXTRA_IS_GROUP, isGroup)
-                    putExtra(ChatActivity.EXTRA_CHAT_TITLE, titleForIntent)
+                    if (body == null || !body.ok) {
+                        Toast.makeText(
+                            this@NewChatActivity,
+                            "No se pudo crear el chat",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return
+                    }
+
+                    Toast.makeText(
+                        this@NewChatActivity,
+                        "Chat listo",
+                        Toast.LENGTH_SHORT
+                    ).show()
+
+                    val i = Intent(this@NewChatActivity, ChatActivity::class.java).apply {
+                        putExtra(ChatActivity.EXTRA_CONVERSATION_ID, body.conversacion_id.toString())
+                        putExtra(ChatActivity.EXTRA_IS_GROUP, isGroup)
+                        putExtra(ChatActivity.EXTRA_CHAT_TITLE, titleForIntent)
+                    }
+                    startActivity(i)
+                    finish()
                 }
-                startActivity(i)
-                finish()
-            }
-            .addOnFailureListener { e ->
-                Toast.makeText(
-                    this,
-                    "Error creando chat: ${e.localizedMessage}",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
+
+                override fun onFailure(call: Call<CreateConversationResponse>, t: Throwable) {
+                    Toast.makeText(
+                        this@NewChatActivity,
+                        "Error de conexión: ${t.localizedMessage}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            })
     }
 
     // Un solo ID de conversación para la misma pareja de usuarios
