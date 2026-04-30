@@ -43,4 +43,28 @@ interface AuthService {
         @Header("Authorization") token: String,
         @Path("id") id: String
     ): Call<MessagesResponse>
+
+    @POST("tracking/start")
+    fun startTracking(
+        @Header("Authorization") token: String,
+        @Body request: StartTrackingRequest
+    ): Call<StartTrackingResponse>
+
+    @POST("tracking/point")
+    fun sendPoint(
+        @Header("Authorization") token: String,
+        @Body request: SendPointRequest
+    ): Call<GenericResponse>
+
+    @POST("tracking/device-status")
+    fun updateDevice(
+        @Header("Authorization") token: String,
+        @Body request: DeviceStatusRequest
+    ): Call<GenericResponse>
+
+    @POST("tracking/stop")
+    fun stopTracking(
+        @Header("Authorization") token: String,
+        @Body request: StopTrackingRequest
+    ): Call<GenericResponse>
 }

@@ -80,3 +80,45 @@ data class MessageApi(
     val text: String,
     val createdAt: String?
 )
+
+data class StartTrackingRequest(
+    val device_id: String,
+    val marca: String?,
+    val modelo: String?,
+    val version_android: Int?
+)
+
+data class StartTrackingResponse(
+    val ok: Boolean,
+    val session_id: Int
+)
+
+data class SendPointRequest(
+    val session_id: Int,
+    val device_id: String,
+    val lat: Double,
+    val lon: Double,
+    val accuracy: Double?,
+    val provider: String?,
+    val origin: String?
+)
+
+data class DeviceStatusRequest(
+    val device_id: String,
+    val status: String,
+    val lat: Double?,
+    val lon: Double?,
+    val accuracy: Double?,
+    val marca: String?,
+    val modelo: String?,
+    val version_android: Int?
+)
+
+data class StopTrackingRequest(
+    val session_id: Int,
+    val device_id: String
+)
+
+data class GenericResponse(
+    val ok: Boolean
+)

@@ -46,6 +46,9 @@ import java.text.SimpleDateFormat
 import java.util.*
 import org.json.JSONException
 import org.json.JSONObject
+import retrofit2.Call
+import retrofit2.Callback
+import retrofit2.Response
 
 class MainActivity : AppCompatActivity() {
 
@@ -72,7 +75,7 @@ class MainActivity : AppCompatActivity() {
 
     // Tracking foreground service
     private var isTracking = false
-    private var currentSessionId: String? = null
+    private var currentSessionId: Int? = null
     private val prefs by lazy {
         getSharedPreferences("shadowrec_prefs", Context.MODE_PRIVATE)
     }
@@ -235,26 +238,110 @@ class MainActivity : AppCompatActivity() {
 
     // ====== Servicio de tracking: start/stop ======
     private fun startLocationTrackingService() {
-        val sessionId = UUID.randomUUID().toString()
-        currentSessionId = sessionId
+        val token = prefs.getString("auth_token", null)
 
-        val serviceIntent = Intent(this, LocationTrackingService::class.java).apply {
-            putExtra(LocationTrackingService.EXTRA_SESSION_ID, sessionId)
+        if (token.isNullOrEmpty()) {
+            Toast.makeText(this, "No hay token de sesión", Toast.LENGTH_SHORT).show()
+            return
         }
 
-        ContextCompat.startForegroundService(this, serviceIntent)
-        isTracking = true
-        prefs.edit().putBoolean("tracking_active", true).apply()
-        updateUbiButtonText()
+        val request = StartTrackingRequest(
+            device_id = deviceId,
+            marca = Build.BRAND,
+            modelo = Build.MODEL,
+            version_android = Build.VERSION.SDK_INT
+        )
+
+        ApiClient.authService.startTracking("Bearer $token", request)
+            .enqueue(object : Callback<StartTrackingResponse> {
+                override fun onResponse(
+                    call: Call<StartTrackingResponse>,
+                    response: Response<StartTrackingResponse>
+                ) {
+                    if (!response.isSuccessful) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Error iniciando tracking",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        return
+                    }
+
+                    val body = response.body()
+
+                    if (body == null || !body.ok) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "No se pudo iniciar tracking",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        return
+                    }
+
+                    currentSessionId = body.session_id
+
+                    val serviceIntent = Intent(this@MainActivity, LocationTrackingService::class.java).apply {
+                        putExtra(LocationTrackingService.EXTRA_SESSION_ID, body.session_id.toString())
+                    }
+
+                    ContextCompat.startForegroundService(this@MainActivity, serviceIntent)
+
+                    isTracking = true
+                    prefs.edit()
+                        .putBoolean("tracking_active", true)
+                        .putInt("current_session_id", body.session_id)
+                        .apply()
+
+                    updateUbiButtonText()
+                }
+
+                override fun onFailure(call: Call<StartTrackingResponse>, t: Throwable) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Error de conexión: ${t.localizedMessage}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            })
     }
 
     private fun stopLocationTrackingService() {
+        val token = prefs.getString("auth_token", null)
+        val sessionId = currentSessionId ?: prefs.getInt("current_session_id", -1).takeIf { it != -1 }
+
         val serviceIntent = Intent(this, LocationTrackingService::class.java)
         stopService(serviceIntent)
+
         isTracking = false
         currentSessionId = null
-        prefs.edit().putBoolean("tracking_active", false).apply()
+
+        prefs.edit()
+            .putBoolean("tracking_active", false)
+            .remove("current_session_id")
+            .apply()
+
         updateUbiButtonText()
+
+        if (!token.isNullOrEmpty() && sessionId != null) {
+            val request = StopTrackingRequest(
+                session_id = sessionId,
+                device_id = deviceId
+            )
+
+            ApiClient.authService.stopTracking("Bearer $token", request)
+                .enqueue(object : Callback<GenericResponse> {
+                    override fun onResponse(
+                        call: Call<GenericResponse>,
+                        response: Response<GenericResponse>
+                    ) {
+                        // Sin acción visual por ahora
+                    }
+
+                    override fun onFailure(call: Call<GenericResponse>, t: Throwable) {
+                        // No bloqueamos la app si falla el stop remoto
+                    }
+                })
+        }
     }
 
     private fun updateUbiButtonText() {

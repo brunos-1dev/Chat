@@ -1,6 +1,7 @@
 package com.example.shadowrec
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.*
 import android.content.*
 import android.content.pm.ServiceInfo
@@ -8,19 +9,14 @@ import android.location.Location
 import android.location.LocationManager
 import android.os.*
 import android.provider.Settings
+import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
-import androidx.core.app.PendingIntentCompat
 import androidx.core.app.ServiceCompat
-import androidx.core.content.ContextCompat
 import com.google.android.gms.location.*
-import com.google.firebase.firestore.FieldValue
-import com.google.firebase.firestore.SetOptions
-import com.google.firebase.firestore.ktx.firestore
-import com.google.firebase.ktx.Firebase
-import java.util.*
-import android.annotation.SuppressLint
-import android.util.Log
+import retrofit2.Call
+import retrofit2.Callback
+import retrofit2.Response
 
 class LocationTrackingService : Service() {
 
@@ -34,16 +30,14 @@ class LocationTrackingService : Service() {
         private const val ACTION_STOP = "com.example.shadowrec.ACTION_STOP"
         private const val ACTION_OPEN_GPS = "com.example.shadowrec.ACTION_OPEN_GPS"
 
-        // Intervalos y umbrales (puedes ajustar)
-        private const val INTERVAL_MS = 30_000L       // pedimos fix cada 30s
+        private const val INTERVAL_MS = 30_000L
         private const val FASTEST_MS = 15_000L
-        private const val WATCHDOG_TICK_MS = 30_000L  // chequeo del watchdog cada 30s
-        private const val STALE_MS = INTERVAL_MS * 2  // 60s sin fix = stale
-        private const val ALERT_MS = INTERVAL_MS * 3  // 90s sin fix = alert
-        private const val OFFLINE_MS = INTERVAL_MS * 5// 150s sin fix = offline (estricto)
+        private const val WATCHDOG_TICK_MS = 30_000L
+        private const val STALE_MS = INTERVAL_MS * 2
+        private const val ALERT_MS = INTERVAL_MS * 3
+        private const val OFFLINE_MS = INTERVAL_MS * 5
     }
 
-    private val db by lazy { Firebase.firestore }
     private val deviceId by lazy {
         Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
     }
@@ -51,13 +45,16 @@ class LocationTrackingService : Service() {
     private lateinit var fused: FusedLocationProviderClient
     private lateinit var request: LocationRequest
 
-    private var sessionId: String? = null
+    private var sessionId: Int? = null
     private var lastFixAt: Long? = null
+    private var status: String = "starting"
 
-    private var status: String = "starting" // ok | stale | gps_off | no_permission | offline | starting
+    private val prefs by lazy {
+        getSharedPreferences("shadowrec_prefs", MODE_PRIVATE)
+    }
 
-    // Watchdog
     private val watchdogHandler = Handler(Looper.getMainLooper())
+
     private val watchdogRunnable = object : Runnable {
         override fun run() {
             checkWatchdog()
@@ -65,12 +62,9 @@ class LocationTrackingService : Service() {
         }
     }
 
-    // Provider (GPS) ON/OFF
     private val providersReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            // Cambios de proveedores / modo
-            val enabled = isLocationEnabled()
-            if (!enabled) {
+            if (!isLocationEnabled()) {
                 onGpsTurnedOff()
             } else {
                 onGpsTurnedOn()
@@ -80,18 +74,27 @@ class LocationTrackingService : Service() {
 
     private val locationCallback = object : LocationCallback() {
         override fun onLocationAvailability(availability: LocationAvailability) {
-            // Si el proveedor está sin disponibilidad, el watchdog terminará detectándolo.
             if (!availability.isLocationAvailable) {
-                // Podés marcar temporalmente como "stale" si querés feedback más rápido:
+                Log.d("LocationService", "LocationAvailability: no disponible")
                 maybeUpdateStatus("stale")
                 updateNotification()
             }
         }
 
         override fun onLocationResult(result: LocationResult) {
-            val loc = result.lastLocation ?: return
+            val loc = result.lastLocation ?: run {
+                Log.d("LocationService", "onLocationResult sin lastLocation")
+                return
+            }
+
+            Log.d(
+                "LocationService",
+                "Llegó ubicación: ${loc.latitude}, ${loc.longitude} | acc=${loc.accuracy} | sessionId=$sessionId"
+            )
+
             lastFixAt = System.currentTimeMillis()
             maybeUpdateStatus("ok")
+
             pushPoint(loc)
             upsertDeviceStatus(loc)
             updateNotification(loc)
@@ -100,22 +103,26 @@ class LocationTrackingService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+
         fused = LocationServices.getFusedLocationProviderClient(this)
 
-        // Crear canal de notificación
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ch = NotificationChannel(CHANNEL_ID, CHANNEL_NAME, NotificationManager.IMPORTANCE_LOW)
+            val ch = NotificationChannel(
+                CHANNEL_ID,
+                CHANNEL_NAME,
+                NotificationManager.IMPORTANCE_LOW
+            )
             ch.setShowBadge(false)
             nm.createNotificationChannel(ch)
         }
 
-        // Registrar receiver para cambios de GPS
         val filter = IntentFilter().apply {
             addAction(LocationManager.PROVIDERS_CHANGED_ACTION)
-            // En algunos dispositivos:
             addAction("android.location.MODE_CHANGED")
         }
+
         registerReceiver(providersReceiver, filter)
     }
 
@@ -125,40 +132,40 @@ class LocationTrackingService : Service() {
                 stopSelfSafely()
                 return START_NOT_STICKY
             }
+
             ACTION_OPEN_GPS -> {
                 openLocationSettings()
             }
         }
 
-        // Tomamos sessionId
-        sessionId = intent?.getStringExtra(EXTRA_SESSION_ID)
+        sessionId = intent?.getStringExtra(EXTRA_SESSION_ID)?.toIntOrNull()
 
-        // Verificar permisos antes de arrancar
+        Log.d("LocationService", "Servicio iniciado con sessionId=$sessionId")
+
+        if (sessionId == null) {
+            Log.e("LocationService", "No llegó sessionId válido al servicio")
+        }
+
         if (!hasLocationPermission()) {
             maybeUpdateStatus("no_permission")
             startForegroundWithNotification()
-            // No pedimos permisos desde el service; la Activity se encarga.
             return START_STICKY
         }
 
-        // Modo estricto: si GPS está apagado, avisar y no pedir updates
         if (!isLocationEnabled()) {
             onGpsTurnedOff()
             startForegroundWithNotification()
             return START_STICKY
         }
 
-        // Configurar peticiones de ubicación
         request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, INTERVAL_MS)
             .setMinUpdateIntervalMillis(FASTEST_MS)
             .setWaitForAccurateLocation(true)
             .build()
 
-        // Iniciar foreground y pedir updates
         startForegroundWithNotification()
         startLocationUpdates()
 
-        // Arrancar watchdog
         watchdogHandler.removeCallbacks(watchdogRunnable)
         watchdogHandler.postDelayed(watchdogRunnable, WATCHDOG_TICK_MS)
 
@@ -168,7 +175,15 @@ class LocationTrackingService : Service() {
     @SuppressLint("MissingPermission")
     private fun startLocationUpdates() {
         if (!hasLocationPermission()) return
-        fused.requestLocationUpdates(request, locationCallback, Looper.getMainLooper())
+
+        Log.d("LocationService", "Solicitando updates de ubicación")
+
+        fused.requestLocationUpdates(
+            request,
+            locationCallback,
+            Looper.getMainLooper()
+        )
+
         maybeUpdateStatus("ok")
         updateNotification()
     }
@@ -180,23 +195,21 @@ class LocationTrackingService : Service() {
     private fun checkWatchdog() {
         val now = System.currentTimeMillis()
 
-        // Sin permiso → ya marcado por onStartCommand, mantener notificación
         if (!hasLocationPermission()) {
             maybeUpdateStatus("no_permission")
             updateNotification()
             return
         }
 
-        // GPS apagado → ya manejado por broadcast; redundancia por seguridad
         if (!isLocationEnabled()) {
             onGpsTurnedOff()
             return
         }
 
-        // Si tenemos al menos un fix, evaluamos tiempos
         val last = lastFixAt
+
         if (last == null) {
-            // Aún no llegó primer fix
+            Log.d("LocationService", "Watchdog: aún sin primer fix")
             maybeUpdateStatus("stale")
             updateNotification()
             return
@@ -206,19 +219,21 @@ class LocationTrackingService : Service() {
 
         when {
             elapsed >= OFFLINE_MS -> {
-                // Estricto: consideramos OFFLINE (cortamos updates y pedimos reactivar)
                 maybeUpdateStatus("offline")
                 stopLocationUpdates()
                 updateNotification()
             }
+
             elapsed >= ALERT_MS -> {
-                maybeUpdateStatus("stale") // escalado fuerte
+                maybeUpdateStatus("stale")
                 updateNotification()
             }
+
             elapsed >= STALE_MS -> {
                 maybeUpdateStatus("stale")
                 updateNotification()
             }
+
             else -> {
                 if (status != "ok") {
                     maybeUpdateStatus("ok")
@@ -229,17 +244,14 @@ class LocationTrackingService : Service() {
     }
 
     private fun onGpsTurnedOff() {
-        // Estricto: pausamos peticiones y notificamos
         stopLocationUpdates()
         maybeUpdateStatus("gps_off")
         updateNotification()
-        upsertDeviceStatus(null) // para que el panel vea el estado
+        upsertDeviceStatus(null)
     }
 
     private fun onGpsTurnedOn() {
-        // Si estábamos pausados por GPS off, reanudamos
         if (status == "gps_off" || status == "offline") {
-            // Reanudar solo si hay permisos
             if (hasLocationPermission()) {
                 startLocationUpdates()
                 maybeUpdateStatus("ok")
@@ -253,6 +265,7 @@ class LocationTrackingService : Service() {
 
     private fun startForegroundWithNotification() {
         val notif = buildNotification(null)
+
         ServiceCompat.startForeground(
             this,
             NOTIF_ID,
@@ -288,30 +301,42 @@ class LocationTrackingService : Service() {
                 val acc = latest?.accuracy?.toInt()?.let { " | ±${it}m" } ?: ""
                 "$lastFixStr$acc"
             }
+
             "gps_off" -> "Tocá “Activar GPS” para continuar"
             "no_permission" -> "Otorgá permisos para continuar"
             "offline" -> "Intentá reactivar el GPS para retomar"
             else -> lastFixStr
         }
 
-        // Acción para abrir ajustes de GPS
         val openGpsIntent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
         val openGpsPI = PendingIntent.getActivity(
-            this, 20, openGpsIntent,
+            this,
+            20,
+            openGpsIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or pendingImmutable()
         )
 
-        // Acción para detener el servicio
         val stopIntent = Intent(this, LocationTrackingService::class.java).apply {
             action = ACTION_STOP
         }
+
         val stopPI = PendingIntent.getService(
-            this, 30, stopIntent,
+            this,
+            30,
+            stopIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or pendingImmutable()
         )
 
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_stat_name) // poné tu ícono
+        val openAppIntent = packageManager.getLaunchIntentForPackage(packageName)
+        val openAppPI = PendingIntent.getActivity(
+            this,
+            10,
+            openAppIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or pendingImmutable()
+        )
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_stat_name)
             .setContentTitle(title)
             .setContentText(content)
             .setStyle(NotificationCompat.BigTextStyle().bigText(content))
@@ -326,94 +351,131 @@ class LocationTrackingService : Service() {
             )
             .addAction(0, "Activar GPS", openGpsPI)
             .addAction(0, "Detener", stopPI)
-
-        // Tocar la notificación abre la app
-        val openAppIntent = packageManager.getLaunchIntentForPackage(packageName)
-        val openAppPI = PendingIntent.getActivity(
-            this, 10, openAppIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or pendingImmutable()
-        )
-        builder.setContentIntent(openAppPI)
-
-        return builder.build()
+            .setContentIntent(openAppPI)
+            .build()
     }
 
     private fun pendingImmutable(): Int =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+            PendingIntent.FLAG_IMMUTABLE
+        else
+            0
 
     private fun hasLocationPermission(): Boolean {
-        val fine = ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
-                android.content.pm.PackageManager.PERMISSION_GRANTED
-        val coarse = ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
-                android.content.pm.PackageManager.PERMISSION_GRANTED
+        val fine =
+            ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        val coarse =
+            ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
         return fine || coarse
     }
 
     private fun isLocationEnabled(): Boolean {
         val lm = getSystemService(LOCATION_SERVICE) as LocationManager
+
         return lm.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
                 lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
     }
 
-
     private fun pushPoint(loc: Location) {
-        val sid = sessionId ?: return
+        val sid = sessionId ?: run {
+            Log.e("LocationService", "No se guarda punto: sessionId null")
+            return
+        }
 
-        // Datos de la ubicación
-        val point = hashMapOf(
-            "deviceId" to deviceId,
-            "lat" to loc.latitude,
-            "lon" to loc.longitude,
-            "accuracy" to loc.accuracy,
-            "createdAt" to FieldValue.serverTimestamp(),
-            "provider" to (loc.provider ?: "fused"),
-            "sessionId" to sid,
-            "source" to "service"
+        val token = prefs.getString("auth_token", null)
+
+        if (token.isNullOrEmpty()) {
+            Log.e("LocationService", "No hay token para guardar punto")
+            return
+        }
+
+        Log.d("LocationService", "Enviando punto sessionId=$sid")
+
+        val request = SendPointRequest(
+            session_id = sid,
+            device_id = deviceId,
+            lat = loc.latitude,
+            lon = loc.longitude,
+            accuracy = loc.accuracy.toDouble(),
+            provider = loc.provider ?: "fused",
+            origin = "service"
         )
 
-        // 1) Guardar igual que antes en la colección "locations"
-        db.collection("locations")
-            .add(point)
-            .addOnFailureListener { e ->
-                Log.e("LocationService", "Error guardando en locations", e)
-            }
+        ApiClient.authService.sendPoint("Bearer $token", request)
+            .enqueue(object : Callback<GenericResponse> {
+                override fun onResponse(
+                    call: Call<GenericResponse>,
+                    response: Response<GenericResponse>
+                ) {
+                    if (response.isSuccessful) {
+                        Log.d("LocationService", "Punto guardado OK")
+                    } else {
+                        Log.e(
+                            "LocationService",
+                            "Error guardando punto: ${response.code()} ${response.errorBody()?.string()}"
+                        )
+                    }
+                }
 
-        // 2) Opcional: seguir intentando guardar también en "sessions"
-        db.collection("sessions")
-            .document(sid)
-            .collection("points")
-            .add(point)
-            .addOnFailureListener { e ->
-                Log.e("LocationService", "Error guardando en sessions", e)
-            }
+                override fun onFailure(call: Call<GenericResponse>, t: Throwable) {
+                    Log.e("LocationService", "Error conexión guardando punto", t)
+                }
+            })
     }
 
     private fun upsertDeviceStatus(loc: Location?) {
-        val payload = hashMapOf(
-            "deviceId" to deviceId,
-            "status" to status,
-            "sessionId" to (sessionId ?: ""),
-            "lastFixAt" to FieldValue.serverTimestamp(),
-            "androidVersion" to Build.VERSION.SDK_INT,
-            "brand" to Build.BRAND,
-            "model" to Build.MODEL
-        ).apply {
-            if (loc != null) {
-                put("lat", loc.latitude)
-                put("lon", loc.longitude)
-                put("accuracy", loc.accuracy)
-            }
+        val token = prefs.getString("auth_token", null)
+
+        if (token.isNullOrEmpty()) {
+            Log.e("LocationService", "No hay token para actualizar dispositivo")
+            return
         }
-        db.collection("devices")
-            .document(deviceId)
-            .set(payload, SetOptions.merge())
-            .addOnFailureListener { /* opcional: log */ }
+
+        val request = DeviceStatusRequest(
+            device_id = deviceId,
+            status = status,
+            lat = loc?.latitude,
+            lon = loc?.longitude,
+            accuracy = loc?.accuracy?.toDouble(),
+            marca = Build.BRAND,
+            modelo = Build.MODEL,
+            version_android = Build.VERSION.SDK_INT
+        )
+
+        ApiClient.authService.updateDevice("Bearer $token", request)
+            .enqueue(object : Callback<GenericResponse> {
+                override fun onResponse(
+                    call: Call<GenericResponse>,
+                    response: Response<GenericResponse>
+                ) {
+                    if (response.isSuccessful) {
+                        Log.d("LocationService", "Dispositivo actualizado OK status=$status")
+                    } else {
+                        Log.e(
+                            "LocationService",
+                            "Error actualizando dispositivo: ${response.code()} ${response.errorBody()?.string()}"
+                        )
+                    }
+                }
+
+                override fun onFailure(call: Call<GenericResponse>, t: Throwable) {
+                    Log.e("LocationService", "Error conexión actualizando dispositivo", t)
+                }
+            })
     }
 
     private fun maybeUpdateStatus(new: String) {
         if (status != new) {
             status = new
-            // Actualización mínima a devices si cambia estado (sin loc)
+
             if (new != "ok") {
                 upsertDeviceStatus(null)
             }
@@ -424,6 +486,7 @@ class LocationTrackingService : Service() {
         val i = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
+
         try {
             startActivity(i)
         } catch (_: Exception) {
@@ -435,13 +498,20 @@ class LocationTrackingService : Service() {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } catch (_: Exception) {
         }
+
         stopSelf()
     }
 
     override fun onDestroy() {
         super.onDestroy()
+
         watchdogHandler.removeCallbacks(watchdogRunnable)
-        unregisterReceiver(providersReceiver)
+
+        try {
+            unregisterReceiver(providersReceiver)
+        } catch (_: Exception) {
+        }
+
         stopLocationUpdates()
         maybeUpdateStatus("offline")
         updateNotification()
