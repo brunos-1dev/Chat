@@ -67,4 +67,10 @@ interface AuthService {
         @Header("Authorization") token: String,
         @Body request: StopTrackingRequest
     ): Call<GenericResponse>
+
+    @POST("qr/scan")
+    fun sendQrScan(
+        @Header("Authorization") token: String,
+        @Body request: QrScanRequest
+    ): Call<GenericResponse>
 }

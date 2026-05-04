@@ -14,10 +14,6 @@ import retrofit2.Response
 
 class RegisterActivity : AppCompatActivity() {
 
-    private val prefs by lazy {
-        getSharedPreferences("shadowrec_prefs", MODE_PRIVATE)
-    }
-
     private val deviceId by lazy {
         Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
     }
@@ -43,10 +39,11 @@ class RegisterActivity : AppCompatActivity() {
         btnRegister.setOnClickListener { registerUser() }
 
         txtGoToLogin.setOnClickListener {
-            val i = Intent(this, AuthActivity::class.java).apply {
+            val intent = Intent(this, AuthActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
             }
-            startActivity(i)
+
+            startActivity(intent)
             finish()
         }
     }
@@ -83,63 +80,53 @@ class RegisterActivity : AppCompatActivity() {
             device_id = deviceId
         )
 
-        ApiClient.authService.register(request).enqueue(object : Callback<LoginResponse> {
-            override fun onResponse(
-                call: Call<LoginResponse>,
-                response: Response<LoginResponse>
-            ) {
-                if (!response.isSuccessful) {
+        ApiClient.authService.register(request)
+            .enqueue(object : Callback<LoginResponse> {
+                override fun onResponse(
+                    call: Call<LoginResponse>,
+                    response: Response<LoginResponse>
+                ) {
+                    if (!response.isSuccessful) {
+                        Toast.makeText(
+                            this@RegisterActivity,
+                            "Error al registrar usuario",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return
+                    }
+
+                    val body = response.body()
+
+                    if (body == null || !body.ok) {
+                        Toast.makeText(
+                            this@RegisterActivity,
+                            body?.message ?: "No se pudo registrar el usuario",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return
+                    }
+
                     Toast.makeText(
                         this@RegisterActivity,
-                        "Error al registrar usuario",
-                        Toast.LENGTH_LONG
+                        "Usuario registrado correctamente",
+                        Toast.LENGTH_SHORT
                     ).show()
-                    return
+
+                    val intent = Intent(this@RegisterActivity, AuthActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                    }
+
+                    startActivity(intent)
+                    finish()
                 }
 
-                val body = response.body()
-
-                if (body == null || !body.ok || body.usuario == null || body.token == null) {
+                override fun onFailure(call: Call<LoginResponse>, t: Throwable) {
                     Toast.makeText(
                         this@RegisterActivity,
-                        body?.message ?: "No se pudo registrar el usuario",
+                        "Error de conexión: ${t.localizedMessage}",
                         Toast.LENGTH_LONG
                     ).show()
-                    return
                 }
-
-                val usuario = body.usuario
-
-//                prefs.edit()
-//                    .putString("auth_token", body.token)
-//                    .putInt("user_id", usuario.id)
-//                    .putString("user_first_name", usuario.nombre)
-//                    .putString("user_last_name", usuario.apellido)
-//                    .putString("user_email", usuario.email)
-//                    .putString("device_id", usuario.device_id)
-//                    .putBoolean("user_profile_complete", true)
-//                    .apply()
-
-                Toast.makeText(
-                    this@RegisterActivity,
-                    "Usuario registrado correctamente",
-                    Toast.LENGTH_SHORT
-                ).show()
-
-                val i = Intent(this@RegisterActivity, AuthActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                }
-                startActivity(i)
-                finish()
-            }
-
-            override fun onFailure(call: Call<LoginResponse>, t: Throwable) {
-                Toast.makeText(
-                    this@RegisterActivity,
-                    "Error de conexión: ${t.localizedMessage}",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-        })
+            })
     }
 }

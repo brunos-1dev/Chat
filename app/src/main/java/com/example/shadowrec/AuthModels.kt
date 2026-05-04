@@ -122,3 +122,9 @@ data class StopTrackingRequest(
 data class GenericResponse(
     val ok: Boolean
 )
+
+data class QrScanRequest(
+    val device_id: String,
+    val texto: String,
+    val origen: String?
+)

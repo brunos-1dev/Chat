@@ -2,18 +2,34 @@ package com.example.shadowrec
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.app.*
-import android.content.*
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.location.Location
 import android.location.LocationManager
-import android.os.*
+import android.os.Build
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
-import com.google.android.gms.location.*
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationAvailability
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
 import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
@@ -28,7 +44,6 @@ class LocationTrackingService : Service() {
         private const val NOTIF_ID = 1010
 
         private const val ACTION_STOP = "com.example.shadowrec.ACTION_STOP"
-        private const val ACTION_OPEN_GPS = "com.example.shadowrec.ACTION_OPEN_GPS"
 
         private const val INTERVAL_MS = 30_000L
         private const val FASTEST_MS = 15_000L
@@ -42,16 +57,16 @@ class LocationTrackingService : Service() {
         Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
     }
 
+    private val prefs by lazy {
+        getSharedPreferences("shadowrec_prefs", MODE_PRIVATE)
+    }
+
     private lateinit var fused: FusedLocationProviderClient
     private lateinit var request: LocationRequest
 
     private var sessionId: Int? = null
     private var lastFixAt: Long? = null
     private var status: String = "starting"
-
-    private val prefs by lazy {
-        getSharedPreferences("shadowrec_prefs", MODE_PRIVATE)
-    }
 
     private val watchdogHandler = Handler(Looper.getMainLooper())
 
@@ -75,22 +90,13 @@ class LocationTrackingService : Service() {
     private val locationCallback = object : LocationCallback() {
         override fun onLocationAvailability(availability: LocationAvailability) {
             if (!availability.isLocationAvailable) {
-                Log.d("LocationService", "LocationAvailability: no disponible")
                 maybeUpdateStatus("stale")
                 updateNotification()
             }
         }
 
         override fun onLocationResult(result: LocationResult) {
-            val loc = result.lastLocation ?: run {
-                Log.d("LocationService", "onLocationResult sin lastLocation")
-                return
-            }
-
-            Log.d(
-                "LocationService",
-                "Llegó ubicación: ${loc.latitude}, ${loc.longitude} | acc=${loc.accuracy} | sessionId=$sessionId"
-            )
+            val loc = result.lastLocation ?: return
 
             lastFixAt = System.currentTimeMillis()
             maybeUpdateStatus("ok")
@@ -105,18 +111,7 @@ class LocationTrackingService : Service() {
         super.onCreate()
 
         fused = LocationServices.getFusedLocationProviderClient(this)
-
-        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ch = NotificationChannel(
-                CHANNEL_ID,
-                CHANNEL_NAME,
-                NotificationManager.IMPORTANCE_LOW
-            )
-            ch.setShowBadge(false)
-            nm.createNotificationChannel(ch)
-        }
+        createNotificationChannel()
 
         val filter = IntentFilter().apply {
             addAction(LocationManager.PROVIDERS_CHANGED_ACTION)
@@ -127,20 +122,12 @@ class LocationTrackingService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP -> {
-                stopSelfSafely()
-                return START_NOT_STICKY
-            }
-
-            ACTION_OPEN_GPS -> {
-                openLocationSettings()
-            }
+        if (intent?.action == ACTION_STOP) {
+            stopSelfSafely()
+            return START_NOT_STICKY
         }
 
         sessionId = intent?.getStringExtra(EXTRA_SESSION_ID)?.toIntOrNull()
-
-        Log.d("LocationService", "Servicio iniciado con sessionId=$sessionId")
 
         if (sessionId == null) {
             Log.e("LocationService", "No llegó sessionId válido al servicio")
@@ -172,11 +159,22 @@ class LocationTrackingService : Service() {
         return START_STICKY
     }
 
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                CHANNEL_NAME,
+                NotificationManager.IMPORTANCE_LOW
+            )
+            channel.setShowBadge(false)
+            nm.createNotificationChannel(channel)
+        }
+    }
+
     @SuppressLint("MissingPermission")
     private fun startLocationUpdates() {
         if (!hasLocationPermission()) return
-
-        Log.d("LocationService", "Solicitando updates de ubicación")
 
         fused.requestLocationUpdates(
             request,
@@ -209,7 +207,6 @@ class LocationTrackingService : Service() {
         val last = lastFixAt
 
         if (last == null) {
-            Log.d("LocationService", "Watchdog: aún sin primer fix")
             maybeUpdateStatus("stale")
             updateNotification()
             return
@@ -264,15 +261,14 @@ class LocationTrackingService : Service() {
     }
 
     private fun startForegroundWithNotification() {
-        val notif = buildNotification(null)
-
         ServiceCompat.startForeground(
             this,
             NOTIF_ID,
-            notif,
+            buildNotification(null),
             if (Build.VERSION.SDK_INT >= 34)
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-            else 0
+            else
+                0
         )
     }
 
@@ -328,6 +324,7 @@ class LocationTrackingService : Service() {
         )
 
         val openAppIntent = packageManager.getLaunchIntentForPackage(packageName)
+
         val openAppPI = PendingIntent.getActivity(
             this,
             10,
@@ -355,24 +352,24 @@ class LocationTrackingService : Service() {
             .build()
     }
 
-    private fun pendingImmutable(): Int =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+    private fun pendingImmutable(): Int {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             PendingIntent.FLAG_IMMUTABLE
-        else
+        } else {
             0
+        }
+    }
 
     private fun hasLocationPermission(): Boolean {
-        val fine =
-            ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val fine = ActivityCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
-        val coarse =
-            ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.ACCESS_COARSE_LOCATION
-            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val coarse = ActivityCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
         return fine || coarse
     }
@@ -385,7 +382,9 @@ class LocationTrackingService : Service() {
     }
 
     private fun pushPoint(loc: Location) {
-        val sid = sessionId ?: run {
+        val sid = sessionId
+
+        if (sid == null) {
             Log.e("LocationService", "No se guarda punto: sessionId null")
             return
         }
@@ -396,8 +395,6 @@ class LocationTrackingService : Service() {
             Log.e("LocationService", "No hay token para guardar punto")
             return
         }
-
-        Log.d("LocationService", "Enviando punto sessionId=$sid")
 
         val request = SendPointRequest(
             session_id = sid,
@@ -415,9 +412,7 @@ class LocationTrackingService : Service() {
                     call: Call<GenericResponse>,
                     response: Response<GenericResponse>
                 ) {
-                    if (response.isSuccessful) {
-                        Log.d("LocationService", "Punto guardado OK")
-                    } else {
+                    if (!response.isSuccessful) {
                         Log.e(
                             "LocationService",
                             "Error guardando punto: ${response.code()} ${response.errorBody()?.string()}"
@@ -456,9 +451,7 @@ class LocationTrackingService : Service() {
                     call: Call<GenericResponse>,
                     response: Response<GenericResponse>
                 ) {
-                    if (response.isSuccessful) {
-                        Log.d("LocationService", "Dispositivo actualizado OK status=$status")
-                    } else {
+                    if (!response.isSuccessful) {
                         Log.e(
                             "LocationService",
                             "Error actualizando dispositivo: ${response.code()} ${response.errorBody()?.string()}"
@@ -483,12 +476,12 @@ class LocationTrackingService : Service() {
     }
 
     private fun openLocationSettings() {
-        val i = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS).apply {
+        val intent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
 
         try {
-            startActivity(i)
+            startActivity(intent)
         } catch (_: Exception) {
         }
     }
