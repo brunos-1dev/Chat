@@ -43,6 +43,10 @@ import org.json.JSONObject
 import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
+import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
 
 class MainActivity : AppCompatActivity() {
 
@@ -170,7 +174,7 @@ class MainActivity : AppCompatActivity() {
                     ensureLocationEnabled { startLocationTrackingService() }
                 }
             } else {
-                stopLocationTrackingService()
+                authenticateBeforeStoppingTracking()
             }
         }
 
@@ -273,6 +277,7 @@ class MainActivity : AppCompatActivity() {
             .remove("current_session_id")
             .apply()
 
+
         updateUbiButtonText()
 
         if (!token.isNullOrEmpty() && sessionId != null) {
@@ -294,6 +299,87 @@ class MainActivity : AppCompatActivity() {
                         // No bloqueamos la app si falla el stop remoto
                     }
                 })
+        }
+    }
+
+    private fun authenticateBeforeStoppingTracking() {
+        val authenticators = getStopTrackingAuthenticators()
+
+        val canAuthenticate = BiometricManager.from(this).canAuthenticate(authenticators)
+
+        if (canAuthenticate != BiometricManager.BIOMETRIC_SUCCESS) {
+            Toast.makeText(
+                this,
+                "No hay un método de seguridad disponible en este dispositivo",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        val promptInfoBuilder = BiometricPrompt.PromptInfo.Builder()
+            .setTitle("Confirmar detención")
+            .setSubtitle("Validá tu identidad para detener la ubicación")
+            .setDescription("Esta acción detendrá el seguimiento de ubicación.")
+            .setAllowedAuthenticators(authenticators)
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            promptInfoBuilder.setNegativeButtonText("Cancelar")
+        }
+
+        val promptInfo = promptInfoBuilder.build()
+
+        val biometricPrompt = BiometricPrompt(
+            this,
+            ContextCompat.getMainExecutor(this),
+            object : BiometricPrompt.AuthenticationCallback() {
+
+                override fun onAuthenticationSucceeded(
+                    result: BiometricPrompt.AuthenticationResult
+                ) {
+                    super.onAuthenticationSucceeded(result)
+
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Validación correcta",
+                        Toast.LENGTH_SHORT
+                    ).show()
+
+                    stopLocationTrackingService()
+                }
+
+                override fun onAuthenticationError(
+                    errorCode: Int,
+                    errString: CharSequence
+                ) {
+                    super.onAuthenticationError(errorCode, errString)
+
+                    Toast.makeText(
+                        this@MainActivity,
+                        "No se detuvo la ubicación",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+
+                override fun onAuthenticationFailed() {
+                    super.onAuthenticationFailed()
+
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Validación no reconocida",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        )
+
+        biometricPrompt.authenticate(promptInfo)
+    }
+
+    private fun getStopTrackingAuthenticators(): Int {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            BIOMETRIC_STRONG or DEVICE_CREDENTIAL
+        } else {
+            BIOMETRIC_STRONG
         }
     }
 
