@@ -47,6 +47,7 @@ import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
 import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
+import android.app.KeyguardManager
 
 class MainActivity : AppCompatActivity() {
 
@@ -78,6 +79,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     private var onLocationEnabledAction: (() -> Unit)? = null
+
+    private val stopTrackingCredentialLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                Toast.makeText(
+                    this,
+                    "Validación correcta",
+                    Toast.LENGTH_SHORT
+                ).show()
+
+                stopLocationTrackingService()
+            } else {
+                Toast.makeText(
+                    this,
+                    "No se detuvo la ubicación",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
 
     private val enableLocationLauncher =
         registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
@@ -303,7 +323,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun authenticateBeforeStoppingTracking() {
-        val authenticators = getStopTrackingAuthenticators()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            authenticateWithLegacyDeviceCredentialBeforeStop()
+            return
+        }
+
+        val authenticators = BIOMETRIC_STRONG or DEVICE_CREDENTIAL
 
         val canAuthenticate = BiometricManager.from(this).canAuthenticate(authenticators)
 
@@ -316,17 +341,12 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val promptInfoBuilder = BiometricPrompt.PromptInfo.Builder()
+        val promptInfo = BiometricPrompt.PromptInfo.Builder()
             .setTitle("Confirmar detención")
             .setSubtitle("Validá tu identidad para detener la ubicación")
             .setDescription("Esta acción detendrá el seguimiento de ubicación.")
             .setAllowedAuthenticators(authenticators)
-
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            promptInfoBuilder.setNegativeButtonText("Cancelar")
-        }
-
-        val promptInfo = promptInfoBuilder.build()
+            .build()
 
         val biometricPrompt = BiometricPrompt(
             this,
@@ -375,12 +395,33 @@ class MainActivity : AppCompatActivity() {
         biometricPrompt.authenticate(promptInfo)
     }
 
-    private fun getStopTrackingAuthenticators(): Int {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            BIOMETRIC_STRONG or DEVICE_CREDENTIAL
-        } else {
-            BIOMETRIC_STRONG
+    private fun authenticateWithLegacyDeviceCredentialBeforeStop() {
+        val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+
+        if (!keyguardManager.isKeyguardSecure) {
+            Toast.makeText(
+                this,
+                "Este dispositivo no tiene PIN, patrón o contraseña configurado",
+                Toast.LENGTH_LONG
+            ).show()
+            return
         }
+
+        val intent = keyguardManager.createConfirmDeviceCredentialIntent(
+            "Confirmar detención",
+            "Validá tu identidad para detener la ubicación"
+        )
+
+        if (intent == null) {
+            Toast.makeText(
+                this,
+                "No se pudo abrir la validación del dispositivo",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        stopTrackingCredentialLauncher.launch(intent)
     }
 
     private fun updateUbiButtonText() {
