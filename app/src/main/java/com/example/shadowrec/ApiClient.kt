@@ -7,7 +7,7 @@ import retrofit2.converter.gson.GsonConverterFactory
 
 object ApiClient {
 
-    private const val BASE_URL = "http://localhost:3000/"
+    private const val BASE_URL = "http://ticstesting.duckdns.org/shadowrec-api/"
 
     private val logging = HttpLoggingInterceptor().apply {
         level = HttpLoggingInterceptor.Level.BODY
