@@ -78,7 +78,9 @@ data class MessageApi(
     val fromEmail: String?,
     val fromName: String?,
     val text: String,
-    val createdAt: String?
+    val createdAt: String?,
+    val delivered: Boolean = false,
+    val read: Boolean = false
 )
 
 data class StartTrackingRequest(

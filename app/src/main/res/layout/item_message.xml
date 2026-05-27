@@ -6,7 +6,6 @@
     android:paddingTop="4dp"
     android:paddingBottom="4dp">
 
-    <!-- 🔹 Separador de fecha -->
     <TextView
         android:id="@+id/txtDateSeparator"
         android:layout_width="match_parent"
@@ -20,7 +19,6 @@
         android:alpha="0.7"
         android:visibility="gone" />
 
-    <!-- 🔹 Contenedor de la burbuja (se alinea izquierda/derecha desde el código) -->
     <LinearLayout
         android:id="@+id/messageRowRoot"
         android:layout_width="match_parent"
@@ -28,7 +26,6 @@
         android:orientation="horizontal"
         android:gravity="start">
 
-        <!-- Burbuja del mensaje -->
         <LinearLayout
             android:id="@+id/messageBubble"
             android:layout_width="wrap_content"
@@ -46,14 +43,31 @@
                 android:text="Mensaje"
                 android:textSize="14sp" />
 
-            <TextView
-                android:id="@+id/txtMessageTime"
+            <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:text="12:34"
-                android:textSize="11sp"
-                android:alpha="0.7" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/txtMessageTime"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="12:34"
+                    android:textSize="11sp"
+                    android:alpha="0.7" />
+
+                <TextView
+                    android:id="@+id/txtMessageStatus"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:text="✓"
+                    android:textSize="12sp"
+                    android:alpha="0.8"
+                    android:visibility="gone" />
+            </LinearLayout>
         </LinearLayout>
 
     </LinearLayout>

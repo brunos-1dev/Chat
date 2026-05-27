@@ -44,6 +44,12 @@ interface AuthService {
         @Path("id") id: String
     ): Call<MessagesResponse>
 
+    @POST("conversations/{id}/read")
+    fun markConversationAsRead(
+        @Header("Authorization") token: String,
+        @Path("id") id: String
+    ): Call<GenericResponse>
+
     @POST("tracking/start")
     fun startTracking(
         @Header("Authorization") token: String,

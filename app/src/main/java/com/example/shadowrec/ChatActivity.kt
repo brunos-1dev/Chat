@@ -62,7 +62,9 @@ class ChatActivity : AppCompatActivity() {
     data class ChatMessageRow(
         val fromUid: String,
         val labelText: String,
-        val createdAt: String?
+        val createdAt: String?,
+        val delivered: Boolean,
+        val read: Boolean
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -186,7 +188,9 @@ class ChatActivity : AppCompatActivity() {
                             ChatMessageRow(
                                 fromUid = msg.fromUid,
                                 labelText = label,
-                                createdAt = msg.createdAt
+                                createdAt = msg.createdAt,
+                                delivered = msg.delivered,
+                                read = msg.read
                             )
                         )
                     }
@@ -256,15 +260,24 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun markConversationAsRead() {
-        val uid = currentUid ?: return
-        val convId = conversationId ?: return
+        val token = prefs.getString("auth_token", null)
+        val convId = conversationId
 
-        val key = "last_read_${uid}_$convId"
-        val nowMillis = System.currentTimeMillis()
+        if (token.isNullOrEmpty() || convId == null) return
 
-        convoPrefs.edit()
-            .putLong(key, nowMillis)
-            .apply()
+        ApiClient.authService.markConversationAsRead("Bearer $token", convId)
+            .enqueue(object : Callback<GenericResponse> {
+                override fun onResponse(
+                    call: Call<GenericResponse>,
+                    response: Response<GenericResponse>
+                ) {
+                    // No mostramos Toast para no molestar al usuario.
+                }
+
+                override fun onFailure(call: Call<GenericResponse>, t: Throwable) {
+                    // Silencioso por ahora.
+                }
+            })
     }
 
     private fun buildLabelForMessage(
@@ -425,6 +438,7 @@ class ChatActivity : AppCompatActivity() {
             val bubble = view.findViewById<LinearLayout>(R.id.messageBubble)
             val txtBody = view.findViewById<TextView>(R.id.txtMessageBody)
             val txtTime = view.findViewById<TextView>(R.id.txtMessageTime)
+            val txtStatus = view.findViewById<TextView>(R.id.txtMessageStatus)
 
             val item = getItem(position)
             val myUid = currentUid
@@ -449,6 +463,27 @@ class ChatActivity : AppCompatActivity() {
             } else {
                 txtTime.text = ""
                 txtTime.visibility = View.GONE
+            }
+
+            if (isMine) {
+                txtStatus.visibility = View.VISIBLE
+
+                txtStatus.text = when {
+                    item.read -> "✓✓"
+                    item.delivered -> "✓✓"
+                    else -> "✓"
+                }
+
+                val statusColor = if (item.read) {
+                    android.graphics.Color.rgb(33, 150, 243) // azul leído
+                } else {
+                    ContextCompat.getColor(this@ChatActivity, R.color.sr_text_secondary)
+                }
+
+                txtStatus.setTextColor(statusColor)
+
+            } else {
+                txtStatus.visibility = View.GONE
             }
 
             val showSeparator = if (item.createdAt.isNullOrBlank()) {
