@@ -17,6 +17,10 @@ import retrofit2.Callback
 import retrofit2.Response
 import java.text.SimpleDateFormat
 import java.util.*
+import android.view.WindowManager
+import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 
 class ChatActivity : AppCompatActivity() {
 
@@ -71,6 +75,9 @@ class ChatActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_chat)
 
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
+        setupKeyboardInsets()
+
         txtChatTitle = findViewById(R.id.txtChatTitle)
         txtChatAvatar = findViewById(R.id.txtChatAvatar)
         listMessages = findViewById(R.id.listMessages)
@@ -123,6 +130,37 @@ class ChatActivity : AppCompatActivity() {
         btnSend.setOnClickListener {
             sendMessage()
         }
+    }
+
+    private fun setupKeyboardInsets() {
+        val root = findViewById<View>(R.id.chatRoot)
+        val inputBar = findViewById<LinearLayout>(R.id.chatInputBar)
+
+        val baseBottomMargin = (inputBar.layoutParams as ConstraintLayout.LayoutParams).bottomMargin
+        val extraGap = (8 * resources.displayMetrics.density).toInt()
+
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            val imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime())
+            val navInsets = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+
+            val keyboardVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
+
+            val newBottomMargin = if (keyboardVisible) {
+                imeInsets.bottom + extraGap
+            } else {
+                maxOf(baseBottomMargin, navInsets.bottom + extraGap)
+            }
+
+            val params = inputBar.layoutParams as ConstraintLayout.LayoutParams
+            if (params.bottomMargin != newBottomMargin) {
+                params.bottomMargin = newBottomMargin
+                inputBar.layoutParams = params
+            }
+
+            insets
+        }
+
+        ViewCompat.requestApplyInsets(root)
     }
 
     override fun onResume() {
