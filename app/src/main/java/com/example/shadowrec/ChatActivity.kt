@@ -8,19 +8,20 @@ import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
 import java.text.SimpleDateFormat
 import java.util.*
-import android.view.WindowManager
-import androidx.constraintlayout.widget.ConstraintLayout
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
 
 class ChatActivity : AppCompatActivity() {
 
@@ -43,10 +44,6 @@ class ChatActivity : AppCompatActivity() {
 
     private val prefs by lazy {
         getSharedPreferences("shadowrec_prefs", MODE_PRIVATE)
-    }
-
-    private val convoPrefs by lazy {
-        getSharedPreferences("shadowrec_conversations", MODE_PRIVATE)
     }
 
     private var currentUid: String? = null
@@ -73,10 +70,13 @@ class ChatActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
+
         setContentView(R.layout.activity_chat)
 
-        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
-        setupKeyboardInsets()
+        setupSystemInsets()
 
         txtChatTitle = findViewById(R.id.txtChatTitle)
         txtChatAvatar = findViewById(R.id.txtChatAvatar)
@@ -132,29 +132,33 @@ class ChatActivity : AppCompatActivity() {
         }
     }
 
-    private fun setupKeyboardInsets() {
+    private fun setupSystemInsets() {
         val root = findViewById<View>(R.id.chatRoot)
+        val header = findViewById<LinearLayout>(R.id.chatHeader)
         val inputBar = findViewById<LinearLayout>(R.id.chatInputBar)
 
-        val baseBottomMargin = (inputBar.layoutParams as ConstraintLayout.LayoutParams).bottomMargin
-        val extraGap = (8 * resources.displayMetrics.density).toInt()
-
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
-            val imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime())
-            val navInsets = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
-
+            val statusBars = insets.getInsets(WindowInsetsCompat.Type.statusBars())
+            val navigationBars = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
             val keyboardVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
 
-            val newBottomMargin = if (keyboardVisible) {
-                imeInsets.bottom + extraGap
-            } else {
-                maxOf(baseBottomMargin, navInsets.bottom + extraGap)
+            val headerParams = header.layoutParams as ConstraintLayout.LayoutParams
+            if (headerParams.topMargin != statusBars.top) {
+                headerParams.topMargin = statusBars.top
+                header.layoutParams = headerParams
             }
 
-            val params = inputBar.layoutParams as ConstraintLayout.LayoutParams
-            if (params.bottomMargin != newBottomMargin) {
-                params.bottomMargin = newBottomMargin
-                inputBar.layoutParams = params
+            val bottomMargin = if (keyboardVisible) {
+                ime.bottom
+            } else {
+                navigationBars.bottom
+            }
+
+            val inputParams = inputBar.layoutParams as ConstraintLayout.LayoutParams
+            if (inputParams.bottomMargin != bottomMargin) {
+                inputParams.bottomMargin = bottomMargin
+                inputBar.layoutParams = inputParams
             }
 
             insets
@@ -309,11 +313,11 @@ class ChatActivity : AppCompatActivity() {
                     call: Call<GenericResponse>,
                     response: Response<GenericResponse>
                 ) {
-                    // No mostramos Toast para no molestar al usuario.
+                    // Sin acción visual.
                 }
 
                 override fun onFailure(call: Call<GenericResponse>, t: Throwable) {
-                    // Silencioso por ahora.
+                    // Silencioso.
                 }
             })
     }
@@ -513,13 +517,12 @@ class ChatActivity : AppCompatActivity() {
                 }
 
                 val statusColor = if (item.read) {
-                    android.graphics.Color.rgb(33, 150, 243) // azul leído
+                    android.graphics.Color.rgb(33, 150, 243)
                 } else {
                     ContextCompat.getColor(this@ChatActivity, R.color.sr_text_secondary)
                 }
 
                 txtStatus.setTextColor(statusColor)
-
             } else {
                 txtStatus.visibility = View.GONE
             }

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <androidx.constraintlayout.widget.ConstraintLayout
+    android:fitsSystemWindows="true"
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
@@ -7,7 +8,6 @@
     android:layout_height="match_parent"
     android:background="#0F172A"
     tools:context=".UsersActivity">
-
     <!-- “AppBar” superior -->
     <LinearLayout
         android:id="@+id/topBar"
@@ -16,7 +16,6 @@
         android:orientation="horizontal"
         android:gravity="center_vertical"
         android:paddingHorizontal="16dp"
-        android:layout_marginTop="30dp"
         android:background="@color/sr_background"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintStart_toStartOf="parent"
@@ -44,7 +43,6 @@
             android:paddingHorizontal="16dp"
             android:background="@drawable/bg_chat_new_button"/>
     </LinearLayout>
-
     <!-- 🔍 Buscador de chats -->
     <EditText
         android:id="@+id/edtSearchChats"

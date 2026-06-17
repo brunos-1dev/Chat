@@ -58,7 +58,7 @@
 
         <activity
             android:name=".ChatActivity"
-            android:windowSoftInputMode="adjustNothing" />
+            android:windowSoftInputMode="stateHidden|adjustNothing" />
 
         <activity android:name=".UsersActivity" />
 
